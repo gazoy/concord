@@ -64,4 +64,4 @@ are borrowed components and are specified in the whitepaper, not prototyped.
 
 ## Licence
 
-Copyright Machine Quotient Ltd. Licence to be decided before publication.
+Copyright 2026 Machine Quotient Ltd. Licensed under the [Apache License 2.0](LICENSE).
