@@ -23,7 +23,9 @@ The project was called Concord until 28 September 2026; the name was changed to 
 
 ![Foliant demo](demo/video/foliant-demo.gif)
 
-`python demo/make_video.py` regenerates the captioned video, GIF and voiceover script in `demo/video/`.
+[Two-minute narrated walkthrough (MP4)](demo/video/foliant-demo-voiced.mp4) of the four scenarios, by the author.
+
+`python demo/make_video.py` regenerates the captioned video, GIF and voiceover script in `demo/video/`; pass the voiceover's section boundaries in seconds to re-time the captions.
 
 ## Run
 
