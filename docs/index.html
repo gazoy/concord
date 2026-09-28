@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Foliant — payments for AI agents</title>
+<meta name="description" content="Foliant gives AI agents on-chain accounts with spending policies enforced by the runtime, and settles thousands of x402 calls in one transaction.">
+<meta property="og:title" content="Foliant — payments for AI agents, with the spend cap on the account">
+<meta property="og:description" content="Agents pay APIs per call over x402. Foliant settles a session in one transaction and enforces the agent's budget in the chain, not in the code that runs it.">
+<meta property="og:image" content="https://foliant.network/assets/poster.jpg">
+<meta property="og:url" content="https://foliant.network/">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  :root{
+    --bg:#0F1B2D; --panel:#182742; --line:#2A3A58; --ink:#F6F5F0; --muted:#B8C4D6; --dim:#8A97AB;
+    --accent:#2F80ED; --accent-soft:#7FB0F5; --light-bg:#F6F5F0; --light-ink:#0F1B2D; --light-muted:#3D4A5C; --light-line:#DDD9CF;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:'IBM Plex Sans',Arial,sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent-soft);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .mono{font-family:'JetBrains Mono','Courier New',monospace}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  header{padding:28px 0}
+  header .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  .brand{font-weight:700;letter-spacing:3px;font-size:15px;color:var(--accent-soft)}
+  nav a{margin-left:22px;color:var(--muted);font-size:15px}
+  .hero{padding:56px 0 64px}
+  .hero h1{font-size:clamp(34px,6vw,64px);line-height:1.05;font-weight:600;margin:0 0 20px;max-width:900px}
+  .hero p.lead{font-size:clamp(18px,2.2vw,22px);color:var(--muted);font-weight:300;max-width:760px;margin:0 0 32px}
+  .cta{display:inline-block;background:var(--accent);color:#fff;padding:12px 20px;border-radius:10px;font-weight:600;margin-right:12px;margin-bottom:10px}
+  .cta:hover{text-decoration:none;filter:brightness(1.08)}
+  .cta.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+  .video{margin:8px 0 0;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#0B1424}
+  video{display:block;width:100%;height:auto}
+  section{padding:56px 0;border-top:1px solid var(--line)}
+  section.light{background:var(--light-bg);color:var(--light-ink);border-top:none}
+  section.light .muted{color:var(--light-muted)}
+  .eyebrow{font-size:13px;letter-spacing:2px;color:var(--accent);font-weight:600;margin:0 0 12px}
+  section.light .eyebrow{color:var(--accent)}
+  h2{font-size:clamp(26px,3.6vw,38px);line-height:1.15;font-weight:600;margin:0 0 28px;max-width:820px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px}
+  section.light .card{background:#fff;border-color:var(--light-line)}
+  .card h3{margin:0 0 8px;font-size:19px;font-weight:600}
+  section:not(.light) .card h3{color:var(--accent-soft)}
+  .card p{margin:0;color:var(--muted);font-size:16px}
+  section.light .card p{color:var(--light-muted)}
+  .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
+  .step{background:#fff;border:1px solid var(--light-line);border-radius:14px;padding:20px}
+  .step.key{background:#E7F0FD;border:2px solid var(--accent)}
+  .step .n{font-family:'JetBrains Mono',monospace;color:var(--accent);font-weight:600;font-size:22px}
+  .step h3{margin:6px 0 4px;font-size:17px}
+  .step p{margin:0;font-size:14px;color:var(--light-muted)}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:18px}
+  .stat .big{font-family:'JetBrains Mono',monospace;font-size:44px;font-weight:600;color:var(--accent-soft)}
+  .stat p{margin:4px 0 0;color:var(--muted);font-size:15px}
+  footer{padding:40px 0 56px;border-top:1px solid var(--line);color:var(--dim);font-size:14px}
+  footer .wrap{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  code{font-family:'JetBrains Mono',monospace;font-size:0.92em;background:rgba(127,176,245,.12);padding:2px 6px;border-radius:6px}
+  section.light code{background:rgba(47,128,237,.1)}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="brand mono">FOLIANT</div>
+    <nav>
+      <a href="#how">How it works</a>
+      <a href="#proof">It runs today</a>
+      <a href="https://github.com/gazoy/concord/blob/main/docs/whitepaper.md">Whitepaper</a>
+      <a href="https://github.com/gazoy/concord">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero" style="border-top:none">
+    <div class="wrap">
+      <p class="eyebrow mono">PAYMENTS FOR AI AGENTS</p>
+      <h1>Give agents a budget, not a hot wallet.</h1>
+      <p class="lead">Agents pay APIs per call over the x402 standard. Foliant settles a whole session in one transaction and enforces the agent's spending limit in the chain, not in the code that runs it.</p>
+      <a class="cta" href="https://github.com/gazoy/concord">See the code</a>
+      <a class="cta ghost" href="mailto:gaz@garethoyston.com?subject=Foliant%20design%20partnership">Talk to us</a>
+      <div class="video" style="margin-top:36px">
+        <video controls playsinline preload="metadata" poster="assets/poster.jpg">
+          <source src="assets/foliant-demo.mp4" type="video/mp4">
+          <img src="assets/foliant-demo.gif" alt="Foliant demo">
+        </video>
+      </div>
+    </div>
+  </section>
+
+  <section class="light" id="problem">
+    <div class="wrap">
+      <p class="eyebrow mono">THE PROBLEM</p>
+      <h2>Agents are becoming economic actors, and every rail treats them like a human with a card.</h2>
+      <div class="grid">
+        <div class="card"><h3>One transaction per call</h3><p>An agent making thousands of API calls an hour signs and settles each one. Too slow, too expensive, and it fills the chain with dust.</p></div>
+        <div class="card"><h3>The budget lives in the code</h3><p>Nothing bounds what an agent can spend except the software driving it. Give an agent a wallet and you have given it a hot wallet.</p></div>
+        <div class="card"><h3>Providers carry the risk</h3><p>An API serving many agents has no way to batch what they owe, verify what they are, or cap what any one of them can run up.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="product">
+    <div class="wrap">
+      <p class="eyebrow mono">WHAT FOLIANT DOES</p>
+      <h2>The budget, the identity and the settlement live on the agent's account.</h2>
+      <div class="grid">
+        <div class="card"><h3>Agent account</h3><p>An on-chain object operated by a signer key that can live in an attested enclave. The owner rotates or revokes it in one transaction.</p></div>
+        <div class="card"><h3>Spending policy</h3><p>Per-transaction and per-window caps, allow and deny lists, expiry, an escalation co-signer. Checked by the runtime, so no code path bypasses it.</p></div>
+        <div class="card"><h3>Channels and pools</h3><p>A session of thousands of calls settles in one transaction. A provider serving many agents settles all of them in one. Every payer can exit alone.</p></div>
+        <div class="card"><h3>x402 on the wire</h3><p>Same headers, same 402 body. Any x402 client or middleware works unchanged; Foliant is a payment scheme, not a new protocol to adopt.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="light" id="how">
+    <div class="wrap">
+      <p class="eyebrow mono">HOW IT WORKS</p>
+      <h2>Four steps touch no chain. The fifth settles a whole session.</h2>
+      <div class="steps">
+        <div class="step"><div class="n">1</div><h3>Agent calls the API</h3><p>Plain HTTP request.</p></div>
+        <div class="step"><div class="n">2</div><h3>API answers 402</h3><p>Price, asset and channel or pool terms, in x402 format.</p></div>
+        <div class="step key"><div class="n">3</div><h3>Agent signs an update</h3><p>Inside the enclave, within policy. Refused if over budget.</p></div>
+        <div class="step"><div class="n">4</div><h3>API verifies and serves</h3><p>Signature and balance checked locally; no chain round trip.</p></div>
+        <div class="step"><div class="n">5</div><h3>API settles in batch</h3><p>Latest update on-chain, whenever it chooses. One transaction.</p></div>
+      </div>
+      <p class="muted" style="margin-top:22px;max-width:820px">Steps 1 to 4 complete inside the latency of the API call. Step 5 amortises one on-chain fee across thousands of calls, so the per-call cost is far below a cent.</p>
+    </div>
+  </section>
+
+  <section id="proof">
+    <div class="wrap">
+      <p class="eyebrow mono">IT RUNS TODAY</p>
+      <h2>A reference implementation with tests proves the design before the chain exists.</h2>
+      <div class="stats">
+        <div class="stat"><div class="big">20 → 2</div><p>API calls to on-chain transactions for one agent session</p></div>
+        <div class="stat"><div class="big">30 → 1</div><p>Calls from three agents settled by one pool transaction</p></div>
+        <div class="stat"><div class="big">0</div><p>Over-budget payments signed: the enclave and the ledger agree exactly</p></div>
+        <div class="stat"><div class="big">22</div><p>Tests, including property-based invariants over hundreds of random sessions</p></div>
+      </div>
+      <p style="margin-top:26px;color:var(--muted)">Open source under Apache-2.0. <code>pip install -r requirements.txt</code> then <code>python demo/run_demo.py</code> runs all four scenarios in about a second. The <a href="https://github.com/gazoy/concord/blob/main/docs/whitepaper.md">whitepaper</a> sets out the full network; the <a href="https://github.com/gazoy/concord/blob/main/docs/study.md">study</a> covers feasibility and costs.</p>
+    </div>
+  </section>
+
+  <section class="light" id="partners">
+    <div class="wrap">
+      <p class="eyebrow mono">DESIGN PARTNERS</p>
+      <h2>We're looking for one API or agent framework to meter real traffic on testnet.</h2>
+      <p class="muted" style="max-width:820px">No cost, no exclusivity, fees waived for the first year of mainnet, and a joint announcement when the integration is live. If you run an x402 endpoint or build agents that pay for tools, <a href="mailto:gaz@garethoyston.com?subject=Foliant%20design%20partnership">get in touch</a>.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div>Foliant · Machine Quotient Ltd, London · <a href="mailto:gaz@garethoyston.com">gaz@garethoyston.com</a></div>
+    <div><a href="https://github.com/gazoy/concord">GitHub</a> · <a href="https://github.com/gazoy/concord/blob/main/docs/whitepaper.md">Whitepaper</a> · <a href="https://github.com/gazoy/concord/blob/main/LICENSE">Apache-2.0</a></div>
+  </div>
+</footer>
+</body>
+</html>

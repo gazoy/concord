@@ -16,6 +16,7 @@ The project was called Concord until 28 September 2026; the name was changed to 
 
 ## Documents
 
+- Website: [foliant.network](https://foliant.network) (served from `docs/` via GitHub Pages)
 - [Whitepaper v0.1](docs/whitepaper.md) — the full design (§6 is what this repo implements)
 - [Design, feasibility and cost study](docs/study.md) — chain survey, build routes, costs, risks
 
