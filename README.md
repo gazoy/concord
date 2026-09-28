@@ -1,14 +1,22 @@
 # Foliant — reference implementation (Python)
 
-Executable specification of the Foliant agent layer (whitepaper §6): agent
-accounts with runtime-enforced spending policies, TEE-style attestation,
-payment channels and streams, Ark-style pooled channels, HTTP 402 metering in
-the x402 wire format, and the compute-and-data market objects.
+Executable specification of the Foliant protocol: budgets and settlement for
+AI agent crews. Agent accounts with spending policies the agent's code cannot
+bypass, TEE-style attestation, payment channels and streams, Ark-style pooled
+channels a whole crew pays through, HTTP 402 metering in the x402 wire format,
+and the compute-and-data market objects (whitepaper §6).
 
-This is a **spec plus demo**, not a chain. It runs in one process with an
+Foliant is a protocol, not a chain: on-chain contracts, an x402 payment scheme
+and an SDK, deployable on chains agents already use. First targets are Base and
+Avalanche. The whitepaper also describes a sovereign chain the protocol could
+grow into if adoption warrants it; that is a direction, not the product. §11a
+of the whitepaper records the prior art (Tempo, the x402 batch-settlement
+scheme and others) and what Foliant adds.
+
+This is a **spec plus demo**, not a deployment. It runs in one process with an
 in-memory ledger so the state machines and their invariants can be read,
-changed and tested quickly. The Cosmos SDK port implements the same state
-machines in Go; the tests here become its conformance suite.
+changed and tested quickly. The Solidity port implements the same state
+machines as contracts; the tests here become its conformance suite.
 
 ## Name
 
