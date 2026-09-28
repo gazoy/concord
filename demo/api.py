@@ -1,15 +1,15 @@
-"""A metered API: one endpoint that charges per call through the Concord 402 gate."""
+"""A metered API: one endpoint that charges per call through the Foliant 402 gate."""
 from __future__ import annotations
 
 from fastapi import Depends, FastAPI, Request, Response
 
-from concord import KeyPair, Ledger, ServiceOffer
-from concord.x402 import Payment, PaymentGate, install
+from foliant import KeyPair, Ledger, ServiceOffer
+from foliant.x402 import Payment, PaymentGate, install
 
 
 def build_app(ledger: Ledger, provider: KeyPair, offer: ServiceOffer) -> tuple[FastAPI, PaymentGate]:
     gate = PaymentGate(ledger, offer, provider)
-    app = FastAPI(title="Concord metered API")
+    app = FastAPI(title="Foliant metered API")
     install(app)
 
     @app.post("/infer")

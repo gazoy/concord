@@ -1,4 +1,4 @@
-"""Concord reference implementation (Python) — agent accounts, policies, channels, pools.
+"""Foliant reference implementation (Python) — agent accounts, policies, channels, pools.
 
 Executable specification for whitepaper §6; the Cosmos SDK port follows these
 state machines one-to-one and reuses the tests in `tests/` as a conformance suite.

@@ -3,9 +3,9 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from concord import Attestation, Contribution, KeyPair, Ledger, Policy, ServiceOffer, royalty_split, sign
-from concord.accounts import AgentAccount
-from concord.errors import InvalidUpdate, PolicyViolation, Unauthorized
+from foliant import Attestation, Contribution, KeyPair, Ledger, Policy, ServiceOffer, royalty_split, sign
+from foliant.accounts import AgentAccount
+from foliant.errors import InvalidUpdate, PolicyViolation, Unauthorized
 from tests.conftest import ASSET, make_agent
 
 
@@ -79,7 +79,7 @@ def test_owner_rotates_signer_and_old_key_is_dead(world):
 
 
 def test_attestation_requires_trusted_vendor(world):
-    from concord import Agent
+    from foliant import Agent
     L, _ = world
     vendor, rogue = KeyPair.from_seed(b"vendor"), KeyPair.from_seed(b"rogue")
     L.trusted_vendors.add(vendor.public.hex)

@@ -4,14 +4,14 @@
 
 ## Executive summary
 
-The best of the surveyed chains can be combined into one coherent design, but it is not a single monolithic chain. The composite that holds together is a **three-layer network**: a small, slow, maximally decentralised settlement layer (Bitcoin/Ethereum lesson), a fast parallel-execution core with sub-second BFT finality (Solana/Sui/Aptos lesson), and a marketplace of sovereign app-chains that plug in via light-client interoperability (Cosmos/Avalanche/Polkadot lesson), all under on-chain governance with a protocol treasury (Cardano/Polkadot lesson). Working name in this study: **Concord**.
+The best of the surveyed chains can be combined into one coherent design, but it is not a single monolithic chain. The composite that holds together is a **three-layer network**: a small, slow, maximally decentralised settlement layer (Bitcoin/Ethereum lesson), a fast parallel-execution core with sub-second BFT finality (Solana/Sui/Aptos lesson), and a marketplace of sovereign app-chains that plug in via light-client interoperability (Cosmos/Avalanche/Polkadot lesson), all under on-chain governance with a protocol treasury (Cardano/Polkadot lesson). Working name in this study: **Foliant**.
 
 The design is technically feasible in 2026 because every component exists in open source. The hard problems are money, team and distribution, not cryptography.
 
 - **Feasibility verdict**: a sovereign L1 of this ambition is a *fundraising* problem first. Comparable launches (Aptos, Sui, Monad, Berachain) raised $100M-$300M+ and took 12-36 months with 20-80 engineers. A one-person company cannot ship it directly.
 - **Costs**: three credible routes. (1) *Lean route* — an app-chain or rollup using an existing stack, AI-payments focus: roughly **$0.6M-1.5M** over 18 months. (2) *Sovereign L1, minimum credible team* — **$8M-25M** to mainnet over 24-30 months. (3) *Top-tier L1 at Aptos/Sui scale* — **$100M+**. Figures are USD; UK salaries in GBP where sourced.
 - **Strongest use case**: agent-native payments and accounts for AI (x402-style metering, streaming micropayments, TEE-attested agent wallets). This is the one AI feature with a real protocol-level argument; compute marketplaces and agent frameworks do not need a new chain.
-- **Recommendation**: do not start with an L1. Start with the *Concord Agent Layer* as a Cosmos-SDK or Avalanche-L1 app-chain (or an OP-Stack rollup) that proves the AI-payments thesis, publish the full composite architecture as a whitepaper, and use traction to raise the round that funds the sovereign core. Regulation (UK regime live 25 Oct 2027, MiCA in force, US CLARITY stalled) favours a foundation-plus-UK-devco structure with no US retail sale.
+- **Recommendation**: do not start with an L1. Start with the *Foliant Agent Layer* as a Cosmos-SDK or Avalanche-L1 app-chain (or an OP-Stack rollup) that proves the AI-payments thesis, publish the full composite architecture as a whitepaper, and use traction to raise the round that funds the sovereign core. Regulation (UK regime live 25 Oct 2027, MiCA in force, US CLARITY stalled) favours a foundation-plus-UK-devco structure with no US retail sale.
 
 ## What each chain does best, and what it paid for it
 
@@ -37,7 +37,7 @@ Two patterns matter for the composite. First, the gap between live and theoretic
 
 Some "bests" cannot coexist in one layer, so the composite separates them into layers that each optimise for one thing. The trilemma still applies inside each layer; it is dodged across layers.
 
-**Mutually exclusive pairs, and how Concord resolves them**
+**Mutually exclusive pairs, and how Foliant resolves them**
 
 | Tension | Why one layer cannot have both | Resolution |
 | --- | --- | --- |
@@ -47,7 +47,7 @@ Some "bests" cannot coexist in one layer, so the composite separates them into l
 | Sovereign app-chains (Cosmos, Avalanche) vs shared security (Polkadot) | Sovereignty means self-secured; shared security means a permissioned slot | Opt-in shared security (Polkadot-style) rented by core stake, IBC-style light-client interop either way |
 | Formal verification (Cardano) vs shipping cadence | Proofs take years; markets move in months | Formally verify only the consensus and the token/bridge contracts; audit the rest conventionally |
 
-**What Concord takes from each chain**
+**What Foliant takes from each chain**
 
 - Bitcoin: hard supply cap, credible neutrality, a light-client-verifiable settlement root.
 - Ethereum: rollup-centric scaling with blob data availability (PeerDAS), account abstraction, the largest tooling and audit ecosystem.
@@ -60,11 +60,11 @@ Some "bests" cannot coexist in one layer, so the composite separates them into l
 - Near: dynamic resharding as the long-term scaling path for the core; chain-abstracted accounts and intents.
 - Hyperliquid: native order-book precompile readable from smart contracts; dual block cadence (fast small blocks, slow large blocks).
 
-**What Concord leaves out**: proof-of-work (energy and hardware centralisation without the incumbency benefit), proof-of-history as a separate primitive (Alpenglow shows it is not needed), a single dominant client, a 2,000-token validator bond per app-chain, and inflation-funded treasuries.
+**What Foliant leaves out**: proof-of-work (energy and hardware centralisation without the incumbency benefit), proof-of-history as a separate primitive (Alpenglow shows it is not needed), a single dominant client, a 2,000-token validator bond per app-chain, and inflation-funded treasuries.
 
 ## Proposed architecture
 
-Concord is a three-layer network with one token and one governance system. Each layer takes the property the surveyed chains proved can be had only by giving something else up.
+Foliant is a three-layer network with one token and one governance system. Each layer takes the property the surveyed chains proved can be had only by giving something else up.
 
 ```mermaid
 flowchart TB
@@ -104,15 +104,15 @@ App-chains settle through the execution core; the core checkpoints into the sett
 
 **Governance and treasury.** Track-based referenda (OpenGov) with delegated representatives and a constitutional committee (Cardano CIP-1694); runtime upgrades are forkless (Polkadot). The treasury is funded from a fixed share of fees on all three layers, not from inflation.
 
-**Token model (CON).** Hard-capped supply. Issuance funds staking rewards on a decaying schedule and reaches zero; thereafter validators earn fees only. Fees are paid in CON on Layer 1 and 2; app-chains may use their own gas token but pay registration and shared-security rent in CON. A portion of base fees is burned (EIP-1559), a portion goes to treasury. Allocation, vesting and any sale are open questions for the legal phase (see Feasibility).
+**Token model (FOL).** Hard-capped supply. Issuance funds staking rewards on a decaying schedule and reaches zero; thereafter validators earn fees only. Fees are paid in FOL on Layer 1 and 2; app-chains may use their own gas token but pay registration and shared-security rent in FOL. A portion of base fees is burned (EIP-1559), a portion goes to treasury. Allocation, vesting and any sale are open questions for the legal phase (see Feasibility).
 
 **Accounts.** Native account abstraction with agent accounts: keys can be held in TEEs with on-chain attestation, spending policies and streaming-payment channels are first-class objects. This is the one piece that is new rather than borrowed.
 
 ## Use cases: standalone and combined
 
-Only one use case has both a real protocol-level argument and unmet demand: payments and accounts for AI agents. The rest are served, today, by existing chains, and Concord would compete on execution rather than on a missing capability.
+Only one use case has both a real protocol-level argument and unmet demand: payments and accounts for AI agents. The rest are served, today, by existing chains, and Foliant would compete on execution rather than on a missing capability.
 
-| Use case | What Concord offers | Needs a new chain? | Demand today | Standalone or combined |
+| Use case | What Foliant offers | Needs a new chain? | Demand today | Standalone or combined |
 | --- | --- | --- | --- | --- |
 | AI agent payments and accounts | Agent-native accounts (TEE-attested keys, spending policies), streaming micropayment channels, x402-style HTTP metering settled in \~1 s for sub-cent fees | Yes, partly: agent accounts and payment channels benefit from base-layer support | Rails exist ([x402](https://www.coinbase.com/developer-platform/products/x402), Skyfire, Google AP2, Visa/Mastercard pilots) but volume is still thin ([CoinDesk, Mar 2026](https://www.coindesk.com/markets/2026/03/11/coinbase-backed-ai-payments-protocol-wants-to-fix-micropayment-but-demand-is-just-not-there-yet)) | Standalone wedge: the Agent chain can ship first |
 | Verifiable inference (zkML/opML) | Verifier precompiles for EZKL-style proofs; opML dispute games | No: a verifier contract on any chain suffices; proving cost, not chain design, is the blocker | Small models only; research-stage for LLMs | Combined: a feature of the Agent chain, not a product |
@@ -130,7 +130,7 @@ Only one use case has both a real protocol-level argument and unmet demand: paym
 
 Technically feasible; economically feasible only with outside capital; regulatorily workable from the UK with the right structure. Competitively the hardest part.
 
-**Technical.** Every component of Concord exists as production open source: Mysticeti and the Move object model (Sui, Apache-2.0), Block-STM (Aptos), CometBFT and IBC (Cosmos), Substrate's forkless upgrades and OpenGov (Polkadot), PeerDAS (Ethereum), the Avalanche L1 registration model. The novel engineering is integration and the agent-account layer, roughly 15-25% of the code. Two independent clients double the core engineering cost but are non-negotiable given Solana's and Ethereum's client-concentration history. Comparable teams took 12-36 months to mainnet ([Aptos](https://www.coindesk.com/business/2022/07/25/aptos-labs-raises-150m-to-revive-diem-in-ftx-ventures-led-funding-round) \~12 months with an ex-Meta team; [Sui](https://www.theblock.co/post/229236/mysten-labs-sui-mainnet) \~24 months; Monad \~30 months).
+**Technical.** Every component of Foliant exists as production open source: Mysticeti and the Move object model (Sui, Apache-2.0), Block-STM (Aptos), CometBFT and IBC (Cosmos), Substrate's forkless upgrades and OpenGov (Polkadot), PeerDAS (Ethereum), the Avalanche L1 registration model. The novel engineering is integration and the agent-account layer, roughly 15-25% of the code. Two independent clients double the core engineering cost but are non-negotiable given Solana's and Ethereum's client-concentration history. Comparable teams took 12-36 months to mainnet ([Aptos](https://www.coindesk.com/business/2022/07/25/aptos-labs-raises-150m-to-revive-diem-in-ftx-ventures-led-funding-round) \~12 months with an ex-Meta team; [Sui](https://www.theblock.co/post/229236/mysten-labs-sui-mainnet) \~24 months; Monad \~30 months).
 
 **Build options, ranked by cost and how much of the design they keep**
 
@@ -150,7 +150,7 @@ Technically feasible; economically feasible only with outside capital; regulator
 - US: GENIUS Act covers stablecoins; the CLARITY market-structure bill passed the House 294-134 but was stalled in the Senate as of March 2026 ([KuCoin summary](https://www.kucoin.com/blog/en-2026-clarity-act-the-lastest-status-and-update)). Until it passes, exclude US persons from any sale or airdrop.
 - Structure: Swiss or Cayman foundation holds IP and treasury; Machine Quotient Ltd as the UK development company under a services agreement; token legal opinion before any generation event.
 
-**Competitive.** Sui, Aptos and Solana already deliver the execution-core properties; Cosmos and Avalanche already sell app-chains; Ethereum owns liquidity. Concord's defensible position is the agent layer plus the neutral settlement root, not speed. If Coinbase's x402 or a Base-native agent standard reaches volume first, the wedge narrows to interop and neutrality, which are harder to sell.
+**Competitive.** Sui, Aptos and Solana already deliver the execution-core properties; Cosmos and Avalanche already sell app-chains; Ethereum owns liquidity. Foliant's defensible position is the agent layer plus the neutral settlement root, not speed. If Coinbase's x402 or a Base-native agent standard reaches volume first, the wedge narrows to interop and neutrality, which are harder to sell.
 
 ## Costs and timeline
 
@@ -190,7 +190,7 @@ flowchart LR
   P2 --> G2{"audit passed"}
   G2 --> P3["Traction and raise<br/>months 15-24<br/>paying agents, Series A"]
   P3 --> G3{"Series A closed"}
-  G3 --> P4["Concord core<br/>months 24-42<br/>two clients, mainnet"]
+  G3 --> P4["Foliant core<br/>months 24-42<br/>two clients, mainnet"]
   classDef accent fill:#dbeafe,stroke:#2563eb,stroke-width:2px;
 ```
 
@@ -200,11 +200,11 @@ Each gate is a funding or safety condition, not a date: the Agent chain does not
 
 ## Enrichment: audit of chains in development (added 28 Sep 2026)
 
-Of 30 chains launched or in testnet since 2025, seven carry mechanisms worth adding to Concord now, five are worth a research track, and the rest either duplicate what Concord already has or solve a problem Concord does not have. The strongest signal from the set is that Concord's agent layer is under-scoped relative to what Tempo, Arc and the AI-compute chains are shipping, and that post-quantum signatures have become a genesis decision rather than a retrofit.
+Of 30 chains launched or in testnet since 2025, seven carry mechanisms worth adding to Foliant now, five are worth a research track, and the rest either duplicate what Foliant already has or solve a problem Foliant does not have. The strongest signal from the set is that Foliant's agent layer is under-scoped relative to what Tempo, Arc and the AI-compute chains are shipping, and that post-quantum signatures have become a genesis decision rather than a retrofit.
 
 **Chain-by-chain audit**
 
-| Chain | Status | Novel mechanism | Verdict for Concord |
+| Chain | Status | Novel mechanism | Verdict for Foliant |
 | --- | --- | --- | --- |
 | [Monad](https://www.monad.xyz/announcements/parallel-execution-monad) | Mainnet 2026 | Parallel EVM via dependency analysis, pipelined MonadBFT | Nothing new; Block-STM already covers it |
 | [MegaETH](https://www.megaeth.com/) | Mainnet Apr 2026 | Node-role specialisation; single high-spec sequencer streaming state at <10 ms | Study the push-based state-streaming API; reject the centralised sequencer |
@@ -213,7 +213,7 @@ Of 30 chains launched or in testnet since 2025, seven carry mechanisms worth add
 | [Initia](https://www.figment.io/insights/initia-first-look-a-network-for-interwoven-rollups/) | Mainnet 2025 | Interwoven rollups with enshrined liquidity | Validation of the app-chain model; nothing new |
 | Story Protocol | Mainnet | IP graph with royalty cascading to derivatives | Optional precompile for a data-licensing economy; defer |
 | Movement | Mainnet beta | Move VM on Ethereum-aligned L2 | Nothing new; validates the Move bet |
-| [Tempo](https://www.coindesk.com/tech/2026/03/18/stripe-led-payments-blockchain-tempo-goes-live-with-protocol-for-ai-agents) (Stripe, Paradigm) | Mainnet Mar 2026 | Machine Payments Protocol for autonomous agent payments | Adopt: make the agent layer speak MPP and x402 rather than a Concord-only format |
+| [Tempo](https://www.coindesk.com/tech/2026/03/18/stripe-led-payments-blockchain-tempo-goes-live-with-protocol-for-ai-agents) (Stripe, Paradigm) | Mainnet Mar 2026 | Machine Payments Protocol for autonomous agent payments | Adopt: make the agent layer speak MPP and x402 rather than a Foliant-only format |
 | [Plasma](https://www.plasma.org/company/blog/plasma-mainnet-beta-and-xpl) | Mainnet beta, \~$2B stablecoin liquidity | Zero-fee stablecoin transfers via protocol-subsidised relay; PlasmaBFT | Adopt: a rate-limited zero-fee lane for whitelisted assets |
 | [Arc](https://www.arc.io/blog/arc-mainnet-goes-live-on-september-16-2026) (Circle) | Mainnet 16 Sep 2026; BlackRock, DTCC validators | Gas paid in USDC; permissioned validators; built for agentic and FX settlement | Adopt: stablecoin-denominated fees via paymaster; note the institutional competitor |
 | Stable, Codex | Mainnet / beta | Stablecoin-native L1s (USDT, USDC) | Nothing new beyond Plasma and Arc; confirms the trend |
@@ -222,7 +222,7 @@ Of 30 chains launched or in testnet since 2025, seven carry mechanisms worth add
 | Penumbra | Mainnet | Shielded staking; encrypted order flow, batch clearing | Adopt the sealed-order idea in the order-book precompile |
 | [Zama fhEVM](https://docs.zama.org/protocol/protocol/overview) | Live on EVM chains | FHE compute on ciphertext; threshold-MPC key management | Research track: too slow today, no hardware trust needed |
 | Mina | Mainnet, Mesa roadmap | Recursive SNARK of the whole chain (\~22 kB) | Research track: recursive proof of settlement for light-client bridges |
-| [Fuel](https://docs.fuel.network/docs/fuel-book/the-architecture/the-fuelvm/) | Mainnet | Declared access lists give conflict-free parallelism with no rollback | Already covered: Concord transactions declare read/write sets; sharpen the spec so declared transactions skip optimistic execution |
+| [Fuel](https://docs.fuel.network/docs/fuel-book/the-architecture/the-fuelvm/) | Mainnet | Declared access lists give conflict-free parallelism with no rollback | Already covered: Foliant transactions declare read/write sets; sharpen the spec so declared transactions skip optimistic execution |
 | [Linera](https://linera.dev/protocol/overview.html) | Testnet | One microchain per user, validator-internal messaging, geographic pinning | Defer: the owned-object fast path gives the same per-user parallelism; revisit if app-chain registration proves too heavy for agents |
 | Eclipse | Mainnet | SVM execution, Ethereum settlement, Celestia DA | Nothing new; modular validation |
 | Sonic | Mainnet | FeeM: fee share rebated to app developers by usage | Optional: developer fee rebate as a treasury bounty; cheap |
@@ -236,16 +236,16 @@ Of 30 chains launched or in testnet since 2025, seven carry mechanisms worth add
 | [Naoris](https://thequantuminsider.com/2026/04/01/naoris-protocol-launches-mainnet-introducing-post-quantum-layer-1-blockchain/) | Mainnet Apr 2026 | Post-quantum cryptography from genesis; device-level attestation | Adopt the lesson: PQ at genesis |
 | [Ethereum Lean consensus](https://hackmd.io/@tcoratger/ryS1ElrWbx) | 2026 spec | Hash-based XMSS signatures over Poseidon2, SNARK-aggregated; layered consensus | Adopt: signature agility and a PQ scheme for settlement validator keys |
 
-**Trends across the set.** Stablecoin-native chains are now a category (Tempo, Plasma, Arc, Stable, Codex), several with the stablecoin as gas. Latency has replaced throughput as the headline metric (MegaETH, Sei Giga, Unichain Flashblocks). Privacy has split into three camps (client-side ZK, incentivised shielded pools, FHE) with none dominant. MPC custody is emerging as a bridge alternative. Post-quantum has moved to a genesis decision. AI-agent economics is growing its own primitives (Tempo MPP, Ritual, 0G, Story), which confirms Concord's thesis and shows its agent layer needs more scope.
+**Trends across the set.** Stablecoin-native chains are now a category (Tempo, Plasma, Arc, Stable, Codex), several with the stablecoin as gas. Latency has replaced throughput as the headline metric (MegaETH, Sei Giga, Unichain Flashblocks). Privacy has split into three camps (client-side ZK, incentivised shielded pools, FHE) with none dominant. MPC custody is emerging as a bridge alternative. Post-quantum has moved to a genesis decision. AI-agent economics is growing its own primitives (Tempo MPP, Ritual, 0G, Story), which confirms Foliant's thesis and shows its agent layer needs more scope.
 
-**Recommended additions to Concord**
+**Recommended additions to Foliant**
 
 | Priority | Addition | From | What it adds | Cost | Risk |
 | --- | --- | --- | --- | --- | --- |
 | Adopt now | Signature agility and a post-quantum scheme (hash-based) for settlement validator keys and account recovery keys at genesis | Ethereum Lean, Naoris | Avoids a migration that no live chain has yet managed | Medium: larger signatures, aggregation design | Spec churn; PQ schemes still maturing |
 | Adopt now | Speak Tempo's Machine Payments Protocol and x402 natively in the agent layer | Tempo, Coinbase | Compatibility with the rails Stripe and Coinbase are standardising | Low: adapters, not mechanisms | Standards controlled by others |
 | Adopt now | Zero-fee lane for whitelisted stablecoin and micropayment settlement, treasury-funded, rate-limited per account | Plasma | Removes the last friction for agent payments | Low | Spam; needs strict per-account limits |
-| Adopt now | Stablecoin-denominated fees on the core via paymaster (paymaster burns CON) | Arc | Predictable costs for payments users; keeps the CON burn | Low-medium | Second value unit in fee accounting |
+| Adopt now | Stablecoin-denominated fees on the core via paymaster (paymaster burns FOL) | Arc | Predictable costs for payments users; keeps the FOL burn | Low-medium | Second value unit in fee accounting |
 | Adopt now | Ark-style pooled channels: many agents share one funded pool with individually provable, unilaterally exitable claims | Bitcoin Ark | Removes per-pair channel funding; suits one API serving thousands of agents | Medium | Coordinator liveness; exit-path complexity |
 | Adopt now | Sealed order submission and MEV rebate to liquidity providers in the order-book precompile | Penumbra, Unichain | Front-running protection and fairer DeFi economics | Low-medium | Latency versus the fast-core goal |
 | Adopt now | Compute-and-data market object standard on the Agent chain: service descriptors, verifiable-inference receipts, data-contribution rewards | Ritual, 0G, Sahara, Story | Fills the gap between agent payments and what AI chains are shipping | Medium | Scope creep into the app layer |
@@ -258,13 +258,13 @@ Of 30 chains launched or in testnet since 2025, seven carry mechanisms worth add
 
 The seven "adopt now" items change the whitepaper in four places: a new design principle (post-quantum at genesis), additions to §6 (MPP/x402 compatibility, pooled channels, compute-and-data market objects), fee-market additions to §5 and §9 (zero-fee lane, stablecoin paymaster), and the order-book precompile (sealed orders, MEV rebate). They add roughly $150k-400k to Route A (pooled channels and the market standard are the costly ones) and nothing to Route B that is not already in its audit and research lines.
 
-## Competitive position: would Concord be the most capable chain?
+## Competitive position: would Foliant be the most capable chain?
 
 On a capability checklist, yes: no existing chain combines fast finality, a neutral settlement root, light-client interoperability, cheap app-chains with optional shared security, on-chain governance on a capped token, post-quantum keys and an agent layer. On the measures that decide adoption (liquidity, developers, distribution) it starts behind every incumbent, so its defensible claim is narrower: the most capable network for autonomous agents, on a neutral settlement layer rather than a corporate validator set.
 
-**Where Concord would lead**
+**Where Foliant would lead**
 
-| Advantage | Concord | Nearest rival and its gap |
+| Advantage | Foliant | Nearest rival and its gap |
 | --- | --- | --- |
 | Agent-native accounts and payments | Runtime-enforced spending policies, TEE-attested signers, pooled channels, x402 and MPP metering as protocol primitives | Tempo and Arc: agent payment protocols on ordinary accounts; Ethereum and Solana: contract-level only, cannot enforce a policy across every code path |
 | Fast finality with a neutral backstop | \~1 s from the core; irreversible in 1-2 min via a thousands-of-validators settlement layer | Sui, Aptos, Solana: sub-second but from \~90-700 validators; Ethereum: 12.8 min; rollups: soft-confirms depend on one sequencer |
@@ -276,7 +276,7 @@ On a capability checklist, yes: no existing chain combines fast finality, a neut
 
 **Where it would not lead**
 
-| Measure | Leader | Concord's position |
+| Measure | Leader | Foliant's position |
 | --- | --- | --- |
 | Raw latency and throughput | MegaETH <10 ms; Solana Alpenglow 100-150 ms; Hyperliquid 70 ms | \~0.5-1 s core; deliberately not chased |
 | Liquidity, developers, tooling | Ethereum $53B TVL and a decade of audited code; Solana consumer apps | None on day one; this matters more than any mechanism |
@@ -284,7 +284,7 @@ On a capability checklist, yes: no existing chain combines fast finality, a neut
 | Simplicity and battle-testing | Any monolithic chain | Three layers, two clients, checkpoint protocol and attestor network: every component is proven, the integration is not |
 | Institutional rails | Arc (BlackRock, DTCC validators), Tempo (Stripe) | Cannot buy that distribution; must interoperate with it |
 
-**Judgement.** "Most capable on paper" is what Aptos, Cardano and Polkadot each were at launch; their market caps against Solana's and Ethereum's show what that is worth. A blockchain's usefulness is dominated by who is on it. Concord wins, if it wins, as the agent network first; the wider capability set is the reason people stay, not the reason they arrive. Two caveats: several of the unique combinations are unique because nobody has tested whether they hold together (a fee-funded treasury on a capped supply under low usage, cross-layer checkpoint slashing, attestor economics), and Ethereum's own roadmap (Lean consensus, PeerDAS, single-slot finality) closes part of the gap by around 2028 without Concord doing anything.
+**Judgement.** "Most capable on paper" is what Aptos, Cardano and Polkadot each were at launch; their market caps against Solana's and Ethereum's show what that is worth. A blockchain's usefulness is dominated by who is on it. Foliant wins, if it wins, as the agent network first; the wider capability set is the reason people stay, not the reason they arrive. Two caveats: several of the unique combinations are unique because nobody has tested whether they hold together (a fee-funded treasury on a capped supply under low usage, cross-layer checkpoint slashing, attestor economics), and Ethereum's own roadmap (Lean consensus, PeerDAS, single-slot finality) closes part of the gap by around 2028 without Foliant doing anything.
 
 ## Risks and open questions
 
@@ -312,9 +312,9 @@ The two risks that would end the venture are distribution (nobody switches chain
 
 ## Recommendation and next steps
 
-Build Concord in the order the market can fund it: the Agent chain first, the composite core second, and the whitepaper for both now.
+Build Foliant in the order the market can fund it: the Agent chain first, the composite core second, and the whitepaper for both now.
 
-1. **Write the Concord whitepaper (weeks 1-8).** The three-layer design in this study, the agent-account and payment-channel spec, and the CON token model. This is the fundraising instrument and costs only time.
+1. **Write the Foliant whitepaper (weeks 1-8).** The three-layer design in this study, the agent-account and payment-channel spec, and the FOL token model. This is the fundraising instrument and costs only time.
 2. **Prototype the agent-account and streaming-channel modules (weeks 4-16)** on a Cosmos SDK devnet, with an x402-compatible HTTP gateway so any API can charge agents. One working demo beats any amount of architecture.
 3. **Find one paying design partner** — an AI agent framework, an inference provider or an API business — before raising. Their letter of intent is the traction a pre-seed wants.
 4. **Raise £600k-£1.5M** (pre-seed plus ecosystem grants) against the whitepaper, prototype and design partner. Take fractional crypto counsel at this point; do not form the foundation before the raise.

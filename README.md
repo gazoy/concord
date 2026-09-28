@@ -1,6 +1,6 @@
-# Concord — reference implementation (Python)
+# Foliant — reference implementation (Python)
 
-Executable specification of the Concord agent layer (whitepaper §6): agent
+Executable specification of the Foliant agent layer (whitepaper §6): agent
 accounts with runtime-enforced spending policies, TEE-style attestation,
 payment channels and streams, Ark-style pooled channels, HTTP 402 metering in
 the x402 wire format, and the compute-and-data market objects.
@@ -9,6 +9,10 @@ This is a **spec plus demo**, not a chain. It runs in one process with an
 in-memory ledger so the state machines and their invariants can be read,
 changed and tested quickly. The Cosmos SDK port implements the same state
 machines in Go; the tests here become its conformance suite.
+
+## Name
+
+The project was called Concord until 28 September 2026; the name was changed to Foliant after a UK trade-mark search. Older links, issues and messages that say Concord refer to this project.
 
 ## Documents
 
@@ -27,14 +31,14 @@ pytest                      # 22 tests incl. property-based invariants
 
 | Path | Whitepaper | What it holds |
 | --- | --- | --- |
-| `concord/crypto.py` | §2 principle 9 | Ed25519 keys, canonical hashing, `Signed` messages with a `scheme` tag for signature agility |
-| `concord/accounts.py` | §6.1-6.3 | `AgentAccount`, `Policy`, `Attestation`, `AgentSigner` (the enclave side that refuses to sign outside policy) |
-| `concord/channels.py` | §6.4, §6.6 | `Channel`: monotonic signed updates, settle, close with timeout, streams |
-| `concord/pools.py` | §6.10 | `Pool`: shared deposit, per-member claims, batch settlement, unilateral exit, contest |
-| `concord/market.py` | §6.7, §6.11 | `ServiceOffer`, `Receipt`, `Contribution` and royalty cascade |
-| `concord/ledger.py` | §5 (state only) | In-memory ledger: envelopes, nonces, policy enforcement, escrow accounting |
-| `concord/agent.py` | SDK | Agent-side helper: builds envelopes and off-chain updates |
-| `concord/x402.py` | §6.5, §6.9 | `PaymentGate` (provider middleware, FastAPI) and `AgentHttpClient` (pays on 402) |
+| `foliant/crypto.py` | §2 principle 9 | Ed25519 keys, canonical hashing, `Signed` messages with a `scheme` tag for signature agility |
+| `foliant/accounts.py` | §6.1-6.3 | `AgentAccount`, `Policy`, `Attestation`, `AgentSigner` (the enclave side that refuses to sign outside policy) |
+| `foliant/channels.py` | §6.4, §6.6 | `Channel`: monotonic signed updates, settle, close with timeout, streams |
+| `foliant/pools.py` | §6.10 | `Pool`: shared deposit, per-member claims, batch settlement, unilateral exit, contest |
+| `foliant/market.py` | §6.7, §6.11 | `ServiceOffer`, `Receipt`, `Contribution` and royalty cascade |
+| `foliant/ledger.py` | §5 (state only) | In-memory ledger: envelopes, nonces, policy enforcement, escrow accounting |
+| `foliant/agent.py` | SDK | Agent-side helper: builds envelopes and off-chain updates |
+| `foliant/x402.py` | §6.5, §6.9 | `PaymentGate` (provider middleware, FastAPI) and `AgentHttpClient` (pays on 402) |
 | `demo/` | | A metered API and the four-scenario demo |
 | `tests/` | §10 | Invariants: conservation, bounds, replay, stale/forged updates, unilateral exit, policy windows |
 

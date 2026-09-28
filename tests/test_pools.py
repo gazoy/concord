@@ -10,8 +10,8 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from concord import KeyPair, Ledger
-from concord.errors import InvalidUpdate
+from foliant import KeyPair, Ledger
+from foliant.errors import InvalidUpdate
 from tests.conftest import ASSET, make_agent
 
 

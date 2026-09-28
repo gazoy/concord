@@ -5,8 +5,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from concord import Attestation, KeyPair, Ledger, Policy, ServiceOffer
-from concord.x402 import HDR_PAYMENT, HDR_RECEIPT, AgentHttpClient
+from foliant import Attestation, KeyPair, Ledger, Policy, ServiceOffer
+from foliant.x402 import HDR_PAYMENT, HDR_RECEIPT, AgentHttpClient
 from demo.api import build_app
 from tests.conftest import ASSET, make_agent
 
@@ -28,7 +28,7 @@ def test_unpaid_request_gets_x402_terms():
     assert r.status_code == 402
     body = r.json()
     assert body["x402Version"] == 1
-    assert body["accepts"][0]["scheme"] == "concord-channel"
+    assert body["accepts"][0]["scheme"] == "foliant-channel"
     assert body["accepts"][0]["payTo"] == provider.address
 
 
@@ -51,7 +51,7 @@ def test_replayed_payment_rejected():
     c = AgentHttpClient(a, http, default_deposit=50, prefer_pool=False)
     c.post("/infer", content="1")
     cid = next(iter(L.channels))
-    replay = base64.b64encode(json.dumps({"scheme": "concord-channel", "id": cid,
+    replay = base64.b64encode(json.dumps({"scheme": "foliant-channel", "id": cid,
                                           "update": a.latest[cid].to_dict()}).encode()).decode()
     r = http.post("/infer", content="2", headers={HDR_PAYMENT: replay})
     assert r.status_code == 402 and "stale" in r.json()["error"]
@@ -62,7 +62,7 @@ def test_underpayment_rejected():
     a = make_agent(L, "a")
     cid = a.open_channel(provider.address, ASSET, 50)
     u = a.pay_channel(cid, 4)  # price is 5
-    hdr = base64.b64encode(json.dumps({"scheme": "concord-channel", "id": cid, "update": u.to_dict()}).encode()).decode()
+    hdr = base64.b64encode(json.dumps({"scheme": "foliant-channel", "id": cid, "update": u.to_dict()}).encode()).decode()
     r = http.post("/infer", content="x", headers={HDR_PAYMENT: hdr})
     assert r.status_code == 402 and "underpaid" in r.json()["error"]
 
@@ -74,7 +74,7 @@ def test_attestation_gate():
     plain = make_agent(L, "plain")
     c = AgentHttpClient(plain, http, default_deposit=50, prefer_pool=False)
     assert c.post("/infer", content="x").status_code == 402
-    from concord import Agent
+    from foliant import Agent
     skp = KeyPair.from_seed(b"attested-s")
     att = Agent(L, KeyPair.from_seed(b"attested-o"), skp, Policy(1000, 5000, 60),
                 attestation=Attestation.issue(vendor, "agent-v1", skp.public))

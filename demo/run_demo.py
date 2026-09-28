@@ -19,9 +19,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi.testclient import TestClient
 
-from concord import Agent, KeyPair, Ledger, Policy, ServiceOffer
-from concord.errors import PolicyViolation
-from concord.x402 import AgentHttpClient
+from foliant import Agent, KeyPair, Ledger, Policy, ServiceOffer
+from foliant.errors import PolicyViolation
+from foliant.x402 import AgentHttpClient
 from demo.api import build_app
 
 ASSET = "USDC"  # smallest unit; think micro-dollars

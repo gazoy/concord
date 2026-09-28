@@ -5,8 +5,8 @@ a 402 response with a JSON body listing accepted payment schemes, a request
 header `X-PAYMENT` carrying a base64 JSON payment, and a response header
 `X-PAYMENT-RESPONSE` carrying the provider's receipt. Two schemes are defined:
 
-  concord-channel  payment = the payer's next signed channel update
-  concord-pool     payment = the payer's next signed pool update
+  foliant-channel  payment = the payer's next signed channel update
+  foliant-pool     payment = the payer's next signed pool update
 
 Steps 1-4 of the metering flow touch no chain. `PaymentGate.settle()` is step 5.
 """
@@ -23,7 +23,7 @@ from fastapi import Request
 from .agent import Agent
 from .channels import verify_update
 from .crypto import KeyPair, Signed, hash_obj, sha256, sign
-from .errors import ConcordError
+from .errors import FoliantError
 from .ledger import Ledger
 from .market import ServiceOffer
 
@@ -76,8 +76,8 @@ class PaymentGate:
 
     def terms(self) -> dict:
         accepts = [{
-            "scheme": "concord-channel",
-            "network": "concord-devnet",
+            "scheme": "foliant-channel",
+            "network": "foliant-devnet",
             "payTo": self.offer.provider,
             "asset": self.offer.asset,
             "maxAmountRequired": str(self.offer.price_per_unit),
@@ -86,7 +86,7 @@ class PaymentGate:
             "requiredCodeHash": self.offer.required_code_hash,
         }]
         if self.offer.pool_id:
-            accepts.append({**accepts[0], "scheme": "concord-pool", "poolId": self.offer.pool_id})
+            accepts.append({**accepts[0], "scheme": "foliant-pool", "poolId": self.offer.pool_id})
         return {"x402Version": X402_VERSION, "accepts": accepts, "error": "payment required"}
 
     def verify(self, header: Optional[str]) -> Payment:
@@ -101,37 +101,37 @@ class PaymentGate:
             if self.offer.required_code_hash:
                 if acct.attestation is None or acct.attestation.code_hash != self.offer.required_code_hash \
                         or not acct.attestation.valid_for(self.ledger.trusted_vendors):
-                    raise ConcordError("attestation required")
-            if scheme == "concord-channel":
+                    raise FoliantError("attestation required")
+            if scheme == "foliant-channel":
                 ch = self.ledger.channels[obj_id]
                 if ch.payee != self.offer.provider or ch.closed or ch.asset != self.offer.asset:
-                    raise ConcordError("channel not payable to this provider")
+                    raise FoliantError("channel not payable to this provider")
                 kind, deposit, onchain_seq, onchain_bal = "channel", ch.deposit, ch.seq, ch.balance_to_payee
-            elif scheme == "concord-pool":
+            elif scheme == "foliant-pool":
                 pool = self.ledger.pools[obj_id]
                 if obj_id != self.offer.pool_id or pool.coordinator != self.offer.provider:
-                    raise ConcordError("pool not run by this provider")
+                    raise FoliantError("pool not run by this provider")
                 claim = pool.members[acct.id]
                 if claim.exited or claim.exit_at is not None:
-                    raise ConcordError("member is exiting")
+                    raise FoliantError("member is exiting")
                 kind, deposit, onchain_seq, onchain_bal = "pool", claim.deposit, claim.seq, claim.paid
             else:
-                raise ConcordError(f"unknown scheme {scheme}")
+                raise FoliantError(f"unknown scheme {scheme}")
             seq, balance = verify_update(update, kind=kind, obj_id=obj_id, account_id=acct.id, signer=acct.signer)
             key = f"{kind}:{obj_id}:{acct.id}"
             prev = self.latest.get(key)
             last_seq, last_bal = (prev.body["seq"], prev.body["balance"]) if prev else (onchain_seq, onchain_bal)
             if seq <= last_seq:
-                raise ConcordError("stale update")
+                raise FoliantError("stale update")
             if balance > deposit:
-                raise ConcordError("update exceeds deposit")
+                raise FoliantError("update exceeds deposit")
             paid = balance - last_bal
             if paid < self.offer.price_per_unit:
-                raise ConcordError(f"underpaid: {paid} < {self.offer.price_per_unit}")
+                raise FoliantError(f"underpaid: {paid} < {self.offer.price_per_unit}")
             self.latest[key] = update
             self.revenue_unsettled += paid
             return Payment(scheme, obj_id, acct.id, update, paid)
-        except (KeyError, ValueError, ConcordError) as e:
+        except (KeyError, ValueError, FoliantError) as e:
             raise PaymentRequired({**self.terms(), "error": str(e)})
 
     def dependency(self):
@@ -159,7 +159,7 @@ class PaymentGate:
             if kind == "channel":
                 try:
                     total += self.ledger.payee_settle_channel(obj_id, u)
-                except ConcordError:
+                except FoliantError:
                     pass  # already at or above this seq
             else:
                 pool_updates.setdefault(obj_id, []).append(u)
@@ -181,20 +181,20 @@ class AgentHttpClient:
     def _choose(self, accepts: list[dict]) -> dict:
         if self.prefer_pool:
             for a in accepts:
-                if a["scheme"] == "concord-pool":
+                if a["scheme"] == "foliant-pool":
                     return a
-        return next(a for a in accepts if a["scheme"] == "concord-channel")
+        return next(a for a in accepts if a["scheme"] == "foliant-channel")
 
     def _payment_for(self, term: dict) -> str:
         L, agent = self.agent.ledger, self.agent
         price = int(term["maxAmountRequired"])
-        if term["scheme"] == "concord-pool":
+        if term["scheme"] == "foliant-pool":
             pid = term["poolId"]
             claim = L.pools[pid].members.get(agent.account.id)
             if claim is None or claim.exited:
                 agent.join_pool(pid, self.default_deposit)
             update = agent.pay_pool(pid, price)
-            return _b64({"scheme": "concord-pool", "id": pid, "update": update.to_dict()})
+            return _b64({"scheme": "foliant-pool", "id": pid, "update": update.to_dict()})
         payee, asset = term["payTo"], term["asset"]
         cid = next((c.id for c in L.channels.values()
                     if c.payer_account == agent.account.id and c.payee == payee and c.asset == asset
@@ -205,7 +205,7 @@ class AgentHttpClient:
             cid = agent.open_channel(payee, asset, self.default_deposit, timeout_secs=self.timeout_secs,
                                      salt=len(L.channels))
         update = agent.pay_channel(cid, price)
-        return _b64({"scheme": "concord-channel", "id": cid, "update": update.to_dict()})
+        return _b64({"scheme": "foliant-channel", "id": cid, "update": update.to_dict()})
 
     def request(self, method: str, url: str, **kw) -> httpx.Response:
         r = self.http.request(method, url, **kw)

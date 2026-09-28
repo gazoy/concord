@@ -10,8 +10,8 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from concord import KeyPair, sign
-from concord.errors import ConcordError, InvalidUpdate, PolicyViolation, Unauthorized
+from foliant import KeyPair, sign
+from foliant.errors import FoliantError, InvalidUpdate, PolicyViolation, Unauthorized
 from tests.conftest import ASSET, make_agent
 
 
@@ -23,7 +23,7 @@ from tests.conftest import ASSET, make_agent
     payee_contests=st.booleans(),
 )
 def test_channel_conservation_and_bounds(deposit, payments, settle_at, payee_contests):
-    from concord import Ledger
+    from foliant import Ledger
     L = Ledger()
     payee = KeyPair.from_seed(b"p")
     a = make_agent(L, "a")
@@ -43,7 +43,7 @@ def test_channel_conservation_and_bounds(deposit, payments, settle_at, payee_con
     # payer closes with its latest; payee may contest with the same latest (no higher exists)
     a.close_channel(cid)
     if payee_contests and cid in a.latest:
-        with pytest.raises(ConcordError):
+        with pytest.raises(FoliantError):
             L.payee_contest_close(cid, a.latest[cid])  # not newer than what close applied
     L.advance(11)
     a.finalize_close(cid)
@@ -69,9 +69,9 @@ def test_stale_and_forged_updates_rejected(world):
     with pytest.raises(Unauthorized):
         L.payee_settle_channel(cid, forged)
     # tampered: body edited after signing
-    from concord.crypto import Signed
+    from foliant.crypto import Signed
     tampered = Signed({**u2.body, "seq": 3, "balance": 100}, u2.signer, u2.signature)
-    with pytest.raises(ConcordError):
+    with pytest.raises(FoliantError):
         L.payee_settle_channel(cid, tampered)
 
 
@@ -118,7 +118,7 @@ def test_stream_accrues_and_caps_at_deposit(world):
 
 
 def test_policy_allow_list_blocks_off_chain_signing(world):
-    from concord import Policy
+    from foliant import Policy
     L, payee = world
     other = KeyPair.from_seed(b"other")
     pol = Policy(per_tx_max=1000, per_window_max=5000, window_secs=60, allow_list=frozenset({payee.address}))
