@@ -256,19 +256,39 @@ Relative to Hyperliquid, Foliant trades the 21-validator, 70 ms design for a wid
 
 ## 11a. Prior art
 
-Every component of the agent layer has been built before, and two of the three pairings have shipped. Foliant's contribution is the specific combination, and this section records what it builds on so that the claim is not overstated.
+Every component of the agent layer has been built before, and as of September 2026 two production systems each hold most of the combination. This section records what was found, so that the claim is not overstated. It is based on a prior-art search conducted on 28 September 2026 and independently re-verified against primary sources the same day; patent databases could not be reached from the search environment and remain unchecked.
 
-| Prior work | What it did | What Foliant takes | What it lacked |
-| --- | --- | --- | --- |
-| L402 (Lightning Labs, 2020-23; Aperture, Fewsats) | HTTP 402 plus Lightning payment channels for metered APIs, with macaroon tokens as proof of payment | The 402-plus-channel flow: pay per call off-chain, settle in batch | No spending policy on the payer; Bitcoin-only liquidity and Lightning operations; no pooling across payers |
-| Coinbase Spend Permissions (2024) and smart-wallet session keys (ZeroDev, Biconomy, MagicBlock) | A per-period allowance an app or agent may draw from a smart wallet, enforced by the wallet contract | The allowance model: give the agent a budget, not a key | Enforcement in contract code, which a bug or an alternative code path can bypass; one transaction per payment; no batching |
-| x402 (Coinbase, 2025; x402 Foundation, 2026) | The wire format: a 402 response carrying payment terms, a signed payment header, a receipt header | The wire format, unchanged | One signed authorisation and one settlement per call; no account-level policy |
-| Lightning Network (2016) and Ark (2023) | Payment channels; pooled shared-UTXO channels with unilateral exit | The channel and pool state machines | Designed for Bitcoin payments between people, not metered machine traffic; no policy layer |
-| Nevermined, Skyfire (2024-26) | Budgets, identity and metering for agents in middleware | The merchant-side tooling as a partner layer | Budget enforced by the middleware operator, not by the ledger |
-| Phala, Oasis ROFL | TEE-attested keys and confidential execution on-chain | Attestation of the agent's signer key | Not tied to a spending policy or to payment channels |
-| ERC-4337 account abstraction (2023), Sui object ownership | Programmable accounts; owned objects executed without consensus | The account-as-object model | No payment-channel or metering layer |
+### The two closest systems
 
-What has not been found, after a search of production chains, chains in development and the agent-payment products listed above: a system in which the agent's spending limit is checked by the execution runtime before any transaction runs, many agents' payments to one provider settle in a single transaction, and the wire format is x402. That is the combination this paper specifies. It is a design choice and an integration, not a cryptographic advance, and a well-resourced incumbent could implement it; the paper's authors make no claim beyond having specified and implemented it first, as far as they are aware, in September 2026.
+**Tempo** (the Stripe/Paradigm L1) is the closest. Three protocol changes, all live on mainnet, together give it a protocol-enforced agent budget and protocol-native channels:
+
+- *TIP-1011, Enhanced Access Key Permissions* (published 4 February 2026, mainnet 27 April 2026): access keys carry per-token spending limits, either one-time or periodic with roll-over, an expiry, call scopes by target and selector, and recipient allowlists for transfers. Checks run in a pre-execution phase and the transaction reverts with `SpendingLimitExceeded` before any user call executes. The proposal names "rate-limited agent/API budgets" as a use case.
+- *TIP-1034, TIP-20 Channel Reserve Precompile* (mainnet 9 June 2026): unidirectional payer-to-payee channels as a precompile, with open, top-up, settle, request-close, grace period and withdraw. Unilateral exit is native.
+- *TIP-1035, Implicit Approval List* (30 April 2026): puts the channel precompile on a list whose transfers enforce the keychain's spending limits, so a deposit into a channel counts against the key's budget. This is the same rule §6 calls "the policy bounds committed value".
+
+On top of this, Tempo's Machine Payments Protocol (MPP, March 2026) carries channel sessions over HTTP 402, and an IETF-style draft (`draft-tempo-session-00`, 26 September 2026) specifies them. What Tempo does not have, on the sources opened: deny lists; a per-transaction cap separate from the budget; any co-signer or escalation path; settlement of many channels in one transaction (the SDK's `settleBatch` sends one transaction per channel and the precompile has no multi-channel settle); pooled channels shared across payers; and the x402 wire format for sessions (MPP uses its own `Payment` authentication scheme, and its x402 interoperability covers only single-charge `exact` flows).
+
+**The x402 Foundation's `batch-settlement` scheme** (generic and Cloudflare bindings 15 April 2026, EVM 5 May 2026, Solana 21 August 2026) is the closest on the settlement side. Payers deposit into channels and sign cumulative vouchers; the provider's `claimWithSignature` aggregates claims from many channels in one call and `settle` sweeps them to the receiver in one transfer; payers have a timed unilateral withdrawal of 15 minutes to 30 days; the spec names an AI-agent escrow use case. It is deployed as a contract on about ten EVM mainnets and is the settlement layer behind Circle's Nanopayments (mainnet 29 April 2026) and Solana's payment-channels program. It has no spending policy: the x402 v2 spec lists budget management as client-side and out of scope.
+
+### Other prior work
+
+| Prior work | What it did | Relation to Foliant |
+| --- | --- | --- |
+| Kite AI (whitepaper Oct-Nov 2025, mainnet 2026) | An agent chain describing "standing intents" with per-transaction and daily caps, merchant allow and deny lists, expiry and hierarchical budgets; state channels and x402 compatibility on the roadmap | The same triple on paper; enforcement is by smart-contract accounts and session keys, and the channel and x402 parts were not found in production |
+| Cosmos SDK x/authz (2021) | Chain-module enforcement of a spend limit, recipient allow list and expiry on delegated sends | Establishes that runtime-enforced spend grants are old; no periodic window, channels or 402 |
+| XRPL payment channels (2017) | Native ledger channels with off-ledger cumulative claims, expiry and either-party close | Establishes that protocol-native channels are old; one payer to one payee, no multi-channel settlement |
+| L402 and Lightning Labs agent tools (2020-26) | HTTP 402 plus Lightning channels for metered APIs; scoped macaroons cap spend at the node | The older Bitcoin-side triple; the cap is enforced by the node software, not by consensus, and the format is L402 not x402 |
+| Ark (2023) and channel factories (2017) | Pooled shared channels with unilateral exit; one funding transaction for many channels | The pool state machine of §6.10 |
+| Coinbase Spend Permissions, Agentic Wallets, AgentCore Payments; Nevermined; Stellar/OpenZeppelin smart accounts; Locus, Payman (2024-26) | Budgets, allow lists and human escalation for agents, enforced in a wallet contract, an enclave or an operator's policy engine, paying over x402 per call | Same allowance model, enforced below the protocol; one settlement per call |
+| A402 (arXiv 2603.01179, March 2026); APEX (2604.02023) | Channel settlements aggregated into one transaction through a TEE vault; 402 with middleware policy and batched settlement | Academic designs of the settlement half; no protocol-enforced budget |
+| Phala, Oasis ROFL | TEE-attested keys on-chain | The attestation of §6.3 |
+| Aptos AIP-103 permissioned signer | Framework-level per-account withdrawal limits with expiry | Rejected August 2026 and removed from the framework |
+
+### What remains
+
+No single deployed system was found that has all of: a spending policy enforced by the execution runtime, settlement of many payers' channels or a shared pool in one transaction with unilateral exit for every payer, and the x402 wire format. Tempo has the first and native channels but settles one channel per transaction under its own wire format; the x402 batch-settlement scheme has the second and third with no policy layer. The gap between them is narrow, both are public, and a reviewer would reasonably call combining them obvious. The elements of Foliant's policy that were not found anywhere at protocol level are the deny list, the per-transaction cap alongside the window cap, and the escalation co-signer; the pooled channel shared across many agents was not found in any 402 system.
+
+Foliant's position, stated plainly: it is an integration of published parts, not a cryptographic advance. Its value, if any, lies in being an open, neutral chain that does the whole of this in the runtime and speaks x402 unchanged, rather than a payments company's chain with its own protocol. That is a positioning and governance argument, not a novelty claim, and the authors make none beyond it.
 
 ## 12. Roadmap
 
