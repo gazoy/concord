@@ -10,3 +10,4 @@ test = ["pytest>=8", "hypothesis>=6"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning:starlette.testclient", "ignore:.*httpx2.*"]

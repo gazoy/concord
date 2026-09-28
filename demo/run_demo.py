@@ -10,7 +10,10 @@ Runs in-process (httpx ASGI transport); no network, no chain daemon.
 from __future__ import annotations
 
 import sys
+import warnings
 from pathlib import Path
+
+warnings.filterwarnings("ignore", message=".*httpx2.*")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
