@@ -10,6 +10,11 @@ in-memory ledger so the state machines and their invariants can be read,
 changed and tested quickly. The Cosmos SDK port implements the same state
 machines in Go; the tests here become its conformance suite.
 
+## Documents
+
+- [Whitepaper v0.1](docs/whitepaper.md) — the full design (§6 is what this repo implements)
+- [Design, feasibility and cost study](docs/study.md) — chain survey, build routes, costs, risks
+
 ## Run
 
 ```bash
