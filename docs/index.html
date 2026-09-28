@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Foliant — payments for AI agents</title>
-<meta name="description" content="Foliant gives AI agents on-chain accounts with spending policies enforced by the runtime, and settles thousands of x402 calls in one transaction.">
-<meta property="og:title" content="Foliant — payments for AI agents, with the spend cap on the account">
-<meta property="og:description" content="Agents pay APIs per call over x402. Foliant settles a session in one transaction and enforces the agent's budget in the chain, not in the code that runs it.">
+<title>Foliant — budgets and settlement for AI agent crews</title>
+<meta name="description" content="Foliant is an open protocol that gives an AI agent crew an on-chain budget its code cannot bypass, and settles thousands of x402 calls in one transaction, on the chains agents already use.">
+<meta property="og:title" content="Foliant — give agent crews a budget, not a hot wallet">
+<meta property="og:description" content="Agents pay APIs per call over x402. Foliant settles a crew's session in one transaction and enforces the crew's budget on-chain, where the code running the agents cannot bypass it.">
 <meta property="og:image" content="https://foliant.network/assets/poster.jpg">
 <meta property="og:url" content="https://foliant.network/">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -79,9 +79,9 @@
 <main>
   <section class="hero" style="border-top:none">
     <div class="wrap">
-      <p class="eyebrow mono">PAYMENTS FOR AI AGENTS</p>
+      <p class="eyebrow mono">AN OPEN PROTOCOL FOR AI AGENT CREWS</p>
       <h1>Give agents a budget, not a hot wallet.</h1>
-      <p class="lead">Agents pay APIs per call over the x402 standard. Foliant settles a whole session in one transaction and enforces the agent's spending limit in the chain, not in the code that runs it.</p>
+      <p class="lead">Agents pay APIs per call over the x402 standard. Foliant settles a whole crew's session in one transaction and enforces the crew's budget on-chain, where the code running the agents cannot bypass it. Contracts, an x402 scheme and an SDK, on the chains agents already use.</p>
       <a class="cta" href="https://github.com/gazoy/concord">See the code</a>
       <a class="cta ghost" href="mailto:gaz@garethoyston.com?subject=Foliant%20design%20partnership">Talk to us</a>
       <div class="video" style="margin-top:36px">
@@ -108,12 +108,13 @@
   <section id="product">
     <div class="wrap">
       <p class="eyebrow mono">WHAT FOLIANT DOES</p>
-      <h2>The budget, the identity and the settlement live on the agent's account.</h2>
+      <h2>The budget, the identity and the settlement live on the crew's accounts, not in its code.</h2>
+      <p class="muted" style="max-width:820px;margin:-12px 0 28px;color:var(--muted)">Foliant is a protocol, not a chain: on-chain contracts, an x402 payment scheme and an SDK. First targets are Base and Avalanche; the same contracts run on any EVM chain.</p>
       <div class="grid">
-        <div class="card"><h3>Agent account</h3><p>An on-chain object operated by a signer key that can live in an attested enclave. The owner rotates or revokes it in one transaction.</p></div>
-        <div class="card"><h3>Spending policy</h3><p>Per-transaction and per-window caps, allow and deny lists, expiry, an escalation co-signer. Checked by the runtime, so no code path bypasses it.</p></div>
-        <div class="card"><h3>Channels and pools</h3><p>A session of thousands of calls settles in one transaction. A provider serving many agents settles all of them in one. Every payer can exit alone.</p></div>
-        <div class="card"><h3>x402 on the wire</h3><p>Same headers, same 402 body. Any x402 client or middleware works unchanged; Foliant is a payment scheme, not a new protocol to adopt.</p></div>
+        <div class="card"><h3>Agent account</h3><p>An on-chain account operated by a signer key that can live in an attested enclave. The owner rotates or revokes it in one transaction.</p></div>
+        <div class="card"><h3>Crew budget</h3><p>Per-transaction and per-window caps, allow and deny lists, expiry, an escalation co-signer, and sub-budgets delegated down a crew that can never exceed their parent. Checked on-chain by the same rule the signer runs, so no code path bypasses it.</p></div>
+        <div class="card"><h3>Channels and pools</h3><p>A session of thousands of calls settles in one transaction. A provider serving a whole crew settles all of it in one, with each member bounded by its own budget. Every payer can exit alone.</p></div>
+        <div class="card"><h3>x402 on the wire</h3><p>Same headers, same 402 body. Any x402 client or middleware works unchanged; Foliant is a payment scheme to add, not a new stack to adopt.</p></div>
       </div>
     </div>
   </section>
@@ -136,21 +137,21 @@
   <section id="proof">
     <div class="wrap">
       <p class="eyebrow mono">IT RUNS TODAY</p>
-      <h2>A reference implementation with tests proves the design before the chain exists.</h2>
+      <h2>A reference implementation with tests proves the design before the contracts ship.</h2>
       <div class="stats">
         <div class="stat"><div class="big">20 → 2</div><p>API calls to on-chain transactions for one agent session</p></div>
         <div class="stat"><div class="big">30 → 1</div><p>Calls from three agents settled by one pool transaction</p></div>
         <div class="stat"><div class="big">0</div><p>Over-budget payments signed: the enclave and the ledger agree exactly</p></div>
         <div class="stat"><div class="big">22</div><p>Tests, including property-based invariants over hundreds of random sessions</p></div>
       </div>
-      <p style="margin-top:26px;color:var(--muted)">Open source under Apache-2.0. <code>pip install -r requirements.txt</code> then <code>python demo/run_demo.py</code> runs all four scenarios in about a second. The <a href="https://github.com/gazoy/concord/blob/main/docs/whitepaper.md">whitepaper</a> sets out the full network; the <a href="https://github.com/gazoy/concord/blob/main/docs/study.md">study</a> covers feasibility and costs.</p>
+      <p style="margin-top:26px;color:var(--muted)">Open source under Apache-2.0. <code>pip install -r requirements.txt</code> then <code>python demo/run_demo.py</code> runs all four scenarios in about a second. The <a href="https://github.com/gazoy/concord/blob/main/docs/whitepaper.md">whitepaper</a> sets out the full network; the <a href="https://github.com/gazoy/concord/blob/main/docs/study.md">study</a> covers feasibility and costs. Section 11a of the whitepaper records the prior art, including Tempo and the x402 batch-settlement scheme, and what Foliant adds to them.</p>
     </div>
   </section>
 
   <section class="light" id="partners">
     <div class="wrap">
       <p class="eyebrow mono">DESIGN PARTNERS</p>
-      <h2>We're looking for one API or agent framework to meter real traffic on testnet.</h2>
+      <h2>We're looking for one agent framework or API to pilot the contracts on a testnet you already use.</h2>
       <p class="muted" style="max-width:820px">No cost, no exclusivity, fees waived for the first year of mainnet, and a joint announcement when the integration is live. If you run an x402 endpoint or build agents that pay for tools, <a href="mailto:gaz@garethoyston.com?subject=Foliant%20design%20partnership">get in touch</a>.</p>
     </div>
   </section>
