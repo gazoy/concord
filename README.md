@@ -19,6 +19,12 @@ The project was called Concord until 28 September 2026; the name was changed to 
 - [Whitepaper v0.1](docs/whitepaper.md) — the full design (§6 is what this repo implements)
 - [Design, feasibility and cost study](docs/study.md) — chain survey, build routes, costs, risks
 
+## Demo
+
+![Foliant demo](demo/video/foliant-demo.gif)
+
+`python demo/make_video.py` regenerates the captioned video, GIF and voiceover script in `demo/video/`.
+
 ## Run
 
 ```bash
