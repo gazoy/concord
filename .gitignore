@@ -5,3 +5,4 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+demo/video/*-voiced.mp4

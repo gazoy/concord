@@ -102,6 +102,13 @@ def render(term_lines, caption, seg_index, total):
 
 
 def main():
+    if len(sys.argv) > 1:
+        # boundaries in seconds from a voiceover; last value = total length
+        b = [0.0] + [float(v) for v in sys.argv[1].split(",")]
+        durs = [b[i + 1] - b[i] for i in range(len(b) - 1)]
+        assert len(durs) == len(SEGMENTS), f"need {len(SEGMENTS)} durations, got {len(durs)}"
+        for i, d in enumerate(durs):
+            SEGMENTS[i] = (d,) + SEGMENTS[i][1:]
     FRAMES.mkdir(parents=True, exist_ok=True)
     for f in FRAMES.glob("*.png"):
         f.unlink()
