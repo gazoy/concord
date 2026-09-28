@@ -254,6 +254,22 @@ Foliant matches the fast monolithic chains on execution and the modular ecosyste
 
 Relative to Hyperliquid, Foliant trades the 21-validator, 70 ms design for a wider set and a slower but neutral settlement root. Relative to Near, Foliant defers sharding: the object model and app-chains carry the load until dynamic resharding of the core is needed, which the settlement layer's data availability is designed to accommodate.
 
+## 11a. Prior art
+
+Every component of the agent layer has been built before, and two of the three pairings have shipped. Foliant's contribution is the specific combination, and this section records what it builds on so that the claim is not overstated.
+
+| Prior work | What it did | What Foliant takes | What it lacked |
+| --- | --- | --- | --- |
+| L402 (Lightning Labs, 2020-23; Aperture, Fewsats) | HTTP 402 plus Lightning payment channels for metered APIs, with macaroon tokens as proof of payment | The 402-plus-channel flow: pay per call off-chain, settle in batch | No spending policy on the payer; Bitcoin-only liquidity and Lightning operations; no pooling across payers |
+| Coinbase Spend Permissions (2024) and smart-wallet session keys (ZeroDev, Biconomy, MagicBlock) | A per-period allowance an app or agent may draw from a smart wallet, enforced by the wallet contract | The allowance model: give the agent a budget, not a key | Enforcement in contract code, which a bug or an alternative code path can bypass; one transaction per payment; no batching |
+| x402 (Coinbase, 2025; x402 Foundation, 2026) | The wire format: a 402 response carrying payment terms, a signed payment header, a receipt header | The wire format, unchanged | One signed authorisation and one settlement per call; no account-level policy |
+| Lightning Network (2016) and Ark (2023) | Payment channels; pooled shared-UTXO channels with unilateral exit | The channel and pool state machines | Designed for Bitcoin payments between people, not metered machine traffic; no policy layer |
+| Nevermined, Skyfire (2024-26) | Budgets, identity and metering for agents in middleware | The merchant-side tooling as a partner layer | Budget enforced by the middleware operator, not by the ledger |
+| Phala, Oasis ROFL | TEE-attested keys and confidential execution on-chain | Attestation of the agent's signer key | Not tied to a spending policy or to payment channels |
+| ERC-4337 account abstraction (2023), Sui object ownership | Programmable accounts; owned objects executed without consensus | The account-as-object model | No payment-channel or metering layer |
+
+What has not been found, after a search of production chains, chains in development and the agent-payment products listed above: a system in which the agent's spending limit is checked by the execution runtime before any transaction runs, many agents' payments to one provider settle in a single transaction, and the wire format is x402. That is the combination this paper specifies. It is a design choice and an integration, not a cryptographic advance, and a well-resourced incumbent could implement it; the paper's authors make no claim beyond having specified and implemented it first, as far as they are aware, in September 2026.
+
 ## 12. Roadmap
 
 The agent layer ships first as a standalone chain; the composite core follows once the agent layer has fee revenue and funding. Each phase ends at a gate that is a condition, not a date.
@@ -279,6 +295,7 @@ Design sources for the components Foliant adopts, all opened 28 September 2026.
 - Near Nightshade dynamic resharding: [Chainspect Near](https://chainspect.app/chain/near)
 - Hyperliquid HyperCore/HyperEVM dual architecture: [CleanSky, 2026](https://cleansky.io/blog/hyperliquid-architecture-hypercore-hyperevm-2026/)
 - Bitcoin Lightning capacity trend: [Spark, 2026](https://www.spark.money/research/lightning-network-2026-state)
+- L402 protocol: Lightning Labs, lightning.engineering (Aperture); Coinbase Spend Permissions: docs.base.org (smart wallet); ERC-4337: eips.ethereum.org/EIPS/eip-4337
 - HTTP 402 agent payments: [Coinbase x402](https://www.coinbase.com/developer-platform/products/x402); [CoinDesk, Mar 2026](https://www.coindesk.com/markets/2026/03/11/coinbase-backed-ai-payments-protocol-wants-to-fix-micropayment-but-demand-is-just-not-there-yet)
 - Regulatory context: [FCA cryptoasset regime](https://www.fca.org.uk/firms/new-regime-cryptoasset-regulation); [Skadden, Jul 2026](https://www.skadden.com/insights/publications/2026/07/fca-finalises-core-rules-for-the-uk-cryptoasset-regime); [MiCA status, Apr 2026](https://binar.com/insights/mica-april-2026-eu-crypto-market/); [CLARITY Act status](https://www.kucoin.com/blog/en-2026-clarity-act-the-lastest-status-and-update)
 
