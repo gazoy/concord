@@ -20,7 +20,10 @@ import {AgentAccounts} from "./AgentAccounts.sol";
 /// the member's account.
 ///
 /// Differences from the reference, all deliberate: updates are EIP-712 signatures from the
-/// account's current signer; members act through msg.sender == that signer; the coordinator's
+/// signer the account had when it joined (snapshotted; AUDIT-2 A2-4) and carry the claim's
+/// epoch, which increments on every join, so updates from an earlier membership cannot replay
+/// (A2-2); updates are ordered by balance, not the member-chosen seq (A2-1); exit authority is
+/// the account's current signer; timeouts are bounded by MAX_TIMEOUT (A2-3); the coordinator's
 /// liveness bond is not ported (its forfeiture is a governance action the reference also leaves
 /// out of scope).
 contract Pools is ReentrancyGuard, EIP712 {
@@ -31,6 +34,8 @@ contract Pools is ReentrancyGuard, EIP712 {
         uint256 paid;       // settled to the coordinator so far
         uint64 seq;
         uint64 exitAt;      // 0 = not exiting
+        uint64 epoch;       // incremented on each join; part of the signed update
+        address signer;     // the account's signer at join: the key whose updates count
         bool exited;
         bool exists;
     }
@@ -50,7 +55,8 @@ contract Pools is ReentrancyGuard, EIP712 {
     }
 
     bytes32 public constant UPDATE_TYPEHASH =
-        keccak256("PoolUpdate(bytes32 pool,bytes32 account,uint64 seq,uint256 balance)");
+        keccak256("PoolUpdate(bytes32 pool,bytes32 account,uint64 epoch,uint64 seq,uint256 balance)");
+    uint64 public constant MAX_TIMEOUT = 30 days;
 
     AgentAccounts public immutable accounts;
     mapping(bytes32 => Pool) private _pools;
@@ -86,7 +92,7 @@ contract Pools is ReentrancyGuard, EIP712 {
     function create(address token, uint64 timeoutSecs, uint256 salt) external returns (bytes32 id) {
         id = poolId(msg.sender, salt);
         if (_pools[id].exists) revert PoolExists();
-        if (timeoutSecs == 0) revert BadUpdate("timeout must be positive");
+        if (timeoutSecs == 0 || timeoutSecs > MAX_TIMEOUT) revert BadUpdate("timeout out of range");
         _pools[id] = Pool(msg.sender, token, timeoutSecs, true);
         emit Created(id, msg.sender, token, timeoutSecs);
     }
@@ -104,7 +110,8 @@ contract Pools is ReentrancyGuard, EIP712 {
         uint256 before = IERC20(p.token).balanceOf(address(this));
         accounts.commit(account, msg.sender, p.token, p.coordinator, deposit, escalationSig, escalationDeadline);
         uint256 received = IERC20(p.token).balanceOf(address(this)) - before;
-        _claims[id][account] = Claim(received, 0, 0, 0, false, true);
+        uint64 epoch = c.epoch + 1;
+        _claims[id][account] = Claim(received, 0, 0, 0, epoch, msg.sender, false, true);
         emit Joined(id, account, received);
     }
 
@@ -117,8 +124,8 @@ contract Pools is ReentrancyGuard, EIP712 {
             Update calldata u = updates[i];
             Claim storage c = _claims[id][u.account];
             if (!c.exists || c.exited) continue;
-            _verify(id, u);
-            if (u.seq <= c.seq) continue;
+            _verify(id, c, u);
+            if (u.balance <= c.paid) continue;
             total += _apply(id, c, u.account, u.seq, u.balance);
         }
         if (total > 0) IERC20(p.token).safeTransfer(p.coordinator, total);
@@ -131,8 +138,8 @@ contract Pools is ReentrancyGuard, EIP712 {
         Claim storage c = _active(id, account);
         if (msg.sender != accounts.signerOf(account)) revert Unauthorized();
         if (sig.length != 0) {
-            _verify(id, Update(account, seq, balance, sig));
-            if (seq > c.seq) {
+            _verify(id, c, Update(account, seq, balance, sig));
+            if (balance > c.paid) {
                 uint256 out = _apply(id, c, account, seq, balance);
                 if (out > 0) IERC20(p.token).safeTransfer(p.coordinator, out);
             }
@@ -148,8 +155,8 @@ contract Pools is ReentrancyGuard, EIP712 {
         Pool storage p = _pool(id);
         Claim storage c = _active(id, u.account);
         if (c.exitAt == 0 || block.timestamp >= c.exitAt) revert NoExitWindow();
-        _verify(id, u);
-        if (u.seq <= c.seq) revert StaleUpdate();
+        _verify(id, c, u);
+        if (u.balance <= c.paid) revert StaleUpdate();
         uint256 out = _apply(id, c, u.account, u.seq, u.balance);
         if (out > 0) IERC20(p.token).safeTransfer(p.coordinator, out);
     }
@@ -174,8 +181,8 @@ contract Pools is ReentrancyGuard, EIP712 {
     function get(bytes32 id) external view returns (Pool memory) { return _pool(id); }
     function claimOf(bytes32 id, bytes32 account) external view returns (Claim memory) { return _claims[id][account]; }
 
-    function updateDigest(bytes32 id, bytes32 account, uint64 seq, uint256 balance) public view returns (bytes32) {
-        return _hashTypedDataV4(keccak256(abi.encode(UPDATE_TYPEHASH, id, account, seq, balance)));
+    function updateDigest(bytes32 id, bytes32 account, uint64 epoch, uint64 seq, uint256 balance) public view returns (bytes32) {
+        return _hashTypedDataV4(keccak256(abi.encode(UPDATE_TYPEHASH, id, account, epoch, seq, balance)));
     }
 
     // -------------------------------------------------------------- internals
@@ -190,14 +197,15 @@ contract Pools is ReentrancyGuard, EIP712 {
         if (!c.exists || c.exited) revert NotMember();
     }
 
-    function _verify(bytes32 id, Update memory u) internal view {
-        (address rec, ECDSA.RecoverError err,) = ECDSA.tryRecover(updateDigest(id, u.account, u.seq, u.balance), u.sig);
-        if (err != ECDSA.RecoverError.NoError || rec != accounts.signerOf(u.account)) revert Unauthorized();
+    function _verify(bytes32 id, Claim storage c, Update memory u) internal view {
+        (address rec, ECDSA.RecoverError err,) =
+            ECDSA.tryRecover(updateDigest(id, u.account, c.epoch, u.seq, u.balance), u.sig);
+        if (err != ECDSA.RecoverError.NoError || rec != c.signer) revert Unauthorized();
     }
 
-    /// @dev Pool._apply from the reference; returns the amount owed to the coordinator (paid by the caller).
+    /// @dev Pool._apply from the reference; balance strictly above paid (checked by callers) and within deposit.
     function _apply(bytes32 id, Claim storage c, bytes32 account, uint64 seq, uint256 balance) internal returns (uint256 delta) {
-        if (balance < c.paid || balance > c.deposit) revert BadUpdate("balance out of range");
+        if (balance > c.deposit) revert BadUpdate("balance out of range");
         delta = balance - c.paid;
         c.seq = seq;
         c.paid = balance;

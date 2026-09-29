@@ -105,3 +105,25 @@ def test_settle_skips_exited_member(world):
     L.advance(11)
     a.finalize_exit(pool.id)
     assert L.coordinator_settle_pool(pool.id, [ua, ub]) == 7  # a exited: skipped, not fatal
+
+
+def test_rejoin_starts_a_new_epoch_and_old_updates_do_not_replay(world):
+    """AUDIT-2 A2-2: a claim reset on rejoin must not accept updates signed under the old membership."""
+    L, _ = world
+    coord = KeyPair.from_seed(b"c")
+    L.mint(coord.address, ASSET, 100)
+    pool = L.create_pool(coord.address, ASSET, timeout_secs=10, bond=100)
+    a = make_agent(L, "a")
+    a.join_pool(pool.id, 100)
+    old = a.pay_pool(pool.id, 40)
+    assert L.coordinator_settle_pool(pool.id, [old]) == 40
+    a.begin_exit(pool.id)
+    L.advance(10)
+    a.finalize_exit(pool.id)
+    a.join_pool(pool.id, 100)  # fresh claim: paid 0, epoch 2
+    assert pool.members[a.account.id].epoch == 2
+    with pytest.raises(InvalidUpdate):
+        L.coordinator_settle_pool(pool.id, [old])  # epoch 1 signature against an epoch-2 claim
+    assert L.balance(coord.address, ASSET) == 40
+    new = a.pay_pool(pool.id, 5)
+    assert L.coordinator_settle_pool(pool.id, [new]) == 5

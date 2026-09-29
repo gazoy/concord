@@ -209,7 +209,7 @@ class AgentSigner:
         self.window.record(now, amount)
         return sign(self.keypair, body)
 
-    def sign_update(self, *, kind: str, obj_id: str, payee: str, seq: int, balance: int, now: int) -> Signed:
+    def sign_update(self, *, kind: str, obj_id: str, payee: str, seq: int, balance: int, now: int, epoch: Optional[int] = None) -> Signed:
         """Sign a channel or pool update.
 
         The policy bounds *committed* value: the deposit was authorised when the
@@ -223,9 +223,15 @@ class AgentSigner:
         spent = self.window.spent(now, self.policy.window_secs)
         self.policy.check(amount=0, payee=payee, now=now, spent_in_window=spent)
         body = {"kind": kind, "id": obj_id, "seq": seq, "balance": balance, "account": self.account_id}
+        if epoch is not None:
+            body["epoch"] = epoch  # pool claims: which membership this update belongs to
         signed = sign(self.keypair, body)
         self._last_balance[obj_id] = balance
         return signed
+
+    def forget(self, obj_id: str) -> None:
+        """Drop the monotonic-balance record for a closed channel or exited pool claim."""
+        self._last_balance.pop(obj_id, None)
 
     def sign_plain(self, body: dict) -> Signed:
         """Sign a non-payment message (account maintenance, exits, receipts)."""

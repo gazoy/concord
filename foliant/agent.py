@@ -102,7 +102,12 @@ class Agent:
         return self.submit("begin_exit", pool_id=pool_id, latest=latest.to_dict() if latest else None)
 
     def finalize_exit(self, pool_id: str) -> dict:
-        return self.submit("finalize_exit", pool_id=pool_id)
+        r = self.submit("finalize_exit", pool_id=pool_id)
+        # the claim is gone: a later rejoin starts a fresh membership (new epoch, balance from 0)
+        self.latest.pop(pool_id, None)
+        self._pool_seq.pop(pool_id, None)
+        self.signer.forget(pool_id)
+        return r
 
     # --- off-chain updates -----------------------------------------------
 
@@ -125,7 +130,7 @@ class Agent:
         balance = (self.latest[pool_id].body["balance"] if pool_id in self.latest else claim.paid) + amount
         if balance > claim.deposit:
             raise ValueError("pool deposit exhausted")
-        u = self.signer.sign_update(kind="pool", obj_id=pool_id, payee=pool.coordinator, seq=seq, balance=balance, now=self.ledger.now)
+        u = self.signer.sign_update(kind="pool", obj_id=pool_id, payee=pool.coordinator, seq=seq, balance=balance, now=self.ledger.now, epoch=claim.epoch)
         self._pool_seq[pool_id] = seq
         self.latest[pool_id] = u
         return u

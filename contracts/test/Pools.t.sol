@@ -8,6 +8,11 @@ import {MockERC20} from "./MockERC20.sol";
 
 /// Mirrors tests/test_pools.py from the reference.
 contract PoolsTest is Test {
+    function _epochOf(bytes32 pid_, bytes32 account_) internal view returns (uint64) {
+        uint64 e = pools.claimOf(pid_, account_).epoch;
+        return e == 0 ? 1 : e; // a not-yet-joined account will get epoch 1 on join
+    }
+
     AgentAccounts acc;
     Pools pools;
     MockERC20 usdc;
@@ -54,7 +59,8 @@ contract PoolsTest is Test {
     }
 
     function _upd(uint256 i, uint64 seq, uint256 balance) internal view returns (Pools.Update memory) {
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(keys[i], pools.updateDigest(pid, members[i], seq, balance));
+        bytes32 d = pools.updateDigest(pid, members[i], _epochOf(pid, members[i]), seq, balance);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(keys[i], d);
         return Pools.Update(members[i], seq, balance, abi.encodePacked(r, s, v));
     }
 
@@ -152,16 +158,19 @@ contract PoolsTest is Test {
         b1[1] = _upd(1, 2, 200);
         assertEq(pools.settle(pid, b1), 300);
         Pools.Update[] memory b2 = new Pools.Update[](2);
-        b2[0] = _upd(0, 1, 400); // stale: skipped
+        b2[0] = _upd(0, 9, 100); // not above what is settled: skipped (seq is bookkeeping only)
         b2[1] = _upd(1, 3, 250);
         assertEq(pools.settle(pid, b2), 50);
         assertEq(usdc.balanceOf(coordinator), 350);
+        Pools.Update[] memory b2b = new Pools.Update[](1);
+        b2b[0] = _upd(0, 1, 400); // lower seq, higher balance: applies
+        assertEq(pools.settle(pid, b2b), 300);
         // but a forged or out-of-range update fails the batch, as in the reference
         Pools.Update[] memory b3 = new Pools.Update[](1);
         b3[0] = _upd(1, 4, 501);
         vm.expectRevert(abi.encodeWithSelector(Pools.BadUpdate.selector, "balance out of range"));
         pools.settle(pid, b3);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(0x9999, pools.updateDigest(pid, members[1], 4, 300));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(0x9999, pools.updateDigest(pid, members[1], _epochOf(pid, members[1]), 4, 300));
         b3[0] = Pools.Update(members[1], 4, 300, abi.encodePacked(r, s, v));
         vm.expectRevert(Pools.Unauthorized.selector);
         pools.settle(pid, b3);
@@ -181,16 +190,19 @@ contract PoolsTest is Test {
         b[1] = _upd(1, 1, 50);
         assertEq(pools.settle(pid, b), 50);
         assertEq(usdc.balanceOf(coordinator), 150);
-        // an exited member may join again with a fresh claim; the old update cannot be replayed on it
-        _join(0, 300);
+        // an exited member may join again with a fresh claim (epoch 2); updates signed under the old
+        // membership are not valid against it, whatever their balance (AUDIT-2 A2-2)
+        _join(0, 500);
         Pools.Claim memory c = pools.claimOf(pid, members[0]);
-        assertEq(c.deposit, 300);
+        assertEq(c.deposit, 500);
         assertEq(c.paid, 0);
-        assertEq(c.seq, 0);
+        assertEq(c.epoch, 2);
         Pools.Update[] memory b2 = new Pools.Update[](1);
-        b2[0] = b[0]; // seq 5, balance 400 > new deposit 300
-        vm.expectRevert(abi.encodeWithSelector(Pools.BadUpdate.selector, "balance out of range"));
+        b2[0] = b[0]; // epoch-1 signature, balance 400 <= new deposit
+        vm.expectRevert(Pools.Unauthorized.selector);
         pools.settle(pid, b2);
+        b2[0] = _upd(0, 1, 50); // signed under epoch 2
+        assertEq(pools.settle(pid, b2), 50);
     }
 
     function test_exit_permissions_and_timing() public {

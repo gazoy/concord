@@ -29,6 +29,7 @@ class PoolClaim:
     seq: int = 0
     exit_at: Optional[int] = None
     exited: bool = False
+    epoch: int = 1  # increments on each join; signed updates must carry it (AUDIT-2 A2-2)
 
 
 @dataclass
@@ -58,7 +59,8 @@ class Pool:
             raise InvalidUpdate("already a member")
         if deposit <= 0:
             raise InvalidUpdate("deposit must be positive")
-        self.members[account_id] = PoolClaim(account_id, deposit)
+        prev = self.members.get(account_id)
+        self.members[account_id] = PoolClaim(account_id, deposit, epoch=(prev.epoch + 1) if prev else 1)
 
     def _claim(self, account_id: str) -> PoolClaim:
         c = self.members.get(account_id)
@@ -66,10 +68,18 @@ class Pool:
             raise NotFound(f"{account_id} is not an active member")
         return c
 
+    def _verify(self, update: Signed, c: PoolClaim, account_id: str, signer: PublicKey) -> tuple[int, int]:
+        """verify_update plus the claim's epoch, so an update from an earlier membership cannot replay."""
+        seq, balance = verify_update(update, kind="pool", obj_id=self.id, account_id=account_id, signer=signer)
+        if update.body.get("epoch") != c.epoch:
+            raise InvalidUpdate(f"update epoch {update.body.get('epoch')} != claim epoch {c.epoch}")
+        return seq, balance
+
     def _apply(self, c: PoolClaim, seq: int, balance: int) -> list[Transfer]:
-        if seq <= c.seq:
-            raise InvalidUpdate(f"seq {seq} not greater than last applied {c.seq}")
-        if balance < c.paid or balance > c.deposit:
+        # ordered by balance, not seq (see channels._apply_balance)
+        if balance <= c.paid:
+            raise InvalidUpdate(f"balance {balance} not greater than settled {c.paid}")
+        if balance > c.deposit:
             raise InvalidUpdate("balance out of range")
         delta = balance - c.paid
         c.seq, c.paid = seq, balance
@@ -78,7 +88,7 @@ class Pool:
     def settle(self, updates: list[tuple[Signed, str, PublicKey]]) -> list[Transfer]:
         """Coordinator submits [(update, account_id, signer)] for any subset of members.
 
-        Updates that are stale (seq <= applied) or from members who have already
+        Updates that are stale (balance <= settled) or from members who have already
         exited are skipped rather than failing the batch, so one member cannot
         block everyone's settlement.
         """
@@ -87,8 +97,8 @@ class Pool:
             c = self.members.get(account_id)
             if c is None or c.exited:
                 continue
-            seq, balance = verify_update(update, kind="pool", obj_id=self.id, account_id=account_id, signer=signer)
-            if seq <= c.seq:
+            seq, balance = self._verify(update, c, account_id, signer)
+            if balance <= c.paid:
                 continue
             effects += self._apply(c, seq, balance)
         return effects
@@ -98,8 +108,8 @@ class Pool:
         c = self._claim(account_id)
         effects: list[Transfer] = []
         if latest is not None:
-            seq, balance = verify_update(latest, kind="pool", obj_id=self.id, account_id=account_id, signer=signer)
-            if seq > c.seq:
+            seq, balance = self._verify(latest, c, account_id, signer)
+            if balance > c.paid:
                 effects = self._apply(c, seq, balance)
         if c.exit_at is None:
             c.exit_at = now + self.timeout_secs
@@ -110,7 +120,7 @@ class Pool:
         c = self._claim(account_id)
         if c.exit_at is None or now >= c.exit_at:
             raise InvalidUpdate("no exit window open")
-        seq, balance = verify_update(higher, kind="pool", obj_id=self.id, account_id=account_id, signer=signer)
+        seq, balance = self._verify(higher, c, account_id, signer)
         return self._apply(c, seq, balance)
 
     def finalize_exit(self, now: int, account_id: str) -> list[Transfer]:

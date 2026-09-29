@@ -65,12 +65,14 @@ class Channel:
         return f"escrow:{self.id}"
 
     def _apply_balance(self, seq: int, balance: int) -> list[Transfer]:
+        """Updates are ordered by balance, not by the payer-chosen seq: an update applies iff its
+        balance is higher than what has been settled. (Ordering by seq let a payer sign a huge seq
+        with the current balance and make every update the payee held "stale" — AUDIT-2 A2-1.)
+        seq is carried for the parties' own bookkeeping."""
         if self.closed:
             raise InvalidUpdate("channel is closed")
-        if seq <= self.seq:
-            raise InvalidUpdate(f"seq {seq} not greater than last applied {self.seq}")
-        if balance < self.balance_to_payee:
-            raise InvalidUpdate("balance may not decrease")
+        if balance <= self.balance_to_payee:
+            raise InvalidUpdate(f"balance {balance} not greater than settled {self.balance_to_payee}")
         if balance > self.deposit:
             raise InvalidUpdate(f"balance {balance} exceeds deposit {self.deposit}")
         delta = balance - self.balance_to_payee
@@ -89,7 +91,7 @@ class Channel:
         effects: list[Transfer] = []
         if latest is not None:
             seq, balance = verify_update(latest, kind="channel", obj_id=self.id, account_id=account_id, signer=signer)
-            if seq > self.seq:
+            if balance > self.balance_to_payee:
                 effects = self._apply_balance(seq, balance)
         if self.closing_at is None:
             self.closing_at = now + self.timeout_secs

@@ -64,7 +64,7 @@ def _pool_view(L: Ledger, pid: str) -> dict:
     if p is None:
         raise HTTPException(404, f"no pool {pid}")
     return {"id": p.id, "coordinator": p.coordinator, "asset": p.asset, "timeout_secs": p.timeout_secs,
-            "members": {mid: {"deposit": m.deposit, "paid": m.paid, "seq": m.seq, "exit_at": m.exit_at, "exited": m.exited}
+            "members": {mid: {"deposit": m.deposit, "paid": m.paid, "seq": m.seq, "exit_at": m.exit_at, "exited": m.exited, "epoch": m.epoch}
                         for mid, m in p.members.items()}}
 
 

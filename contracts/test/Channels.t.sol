@@ -86,7 +86,7 @@ contract ChannelsTest is Test {
             balance = balance + step > deposit ? deposit : balance + step;
             seq++;
             bytes memory sig = _sig(signerKey, id, seq, balance);
-            if (i % 3 == 0) {
+            if (i % 3 == 0 && balance > highest) {
                 // payee settles some updates as they arrive
                 ch.settle(id, seq, balance, sig);
                 highest = balance;
@@ -99,7 +99,7 @@ contract ChannelsTest is Test {
         vm.prank(signer);
         ch.beginClose(id, 0, 0, "");
         if (payeeContests) {
-            if (lastSeq > highest_seq(id)) {
+            if (lastBal > highest) {
                 ch.settle(id, lastSeq, lastBal, lastSig);
                 highest = lastBal;
             }
@@ -113,22 +113,20 @@ contract ChannelsTest is Test {
         assertLe(highest, deposit);
     }
 
-    function highest_seq(bytes32 id) internal view returns (uint64) { return ch.get(id).seq; }
-
     function test_stale_and_forged_updates_rejected() public {
         bytes32 id = _open(500, 60);
         ch.settle(id, 2, 200, _sig(signerKey, id, 2, 200));
         assertEq(usdc.balanceOf(payee), 200);
-        // stale seq
+        // stale: balance not above what is settled (seq is bookkeeping only, AUDIT-2 A2-1)
         bytes memory _pre1 = _sig(signerKey, id, 2, 300);
+        ch.settle(id, 2, 300, _pre1); // same seq, higher balance: applies
+        assertEq(usdc.balanceOf(payee), 300);
+        bytes memory _pre2 = _sig(signerKey, id, 9, 300);
         vm.expectRevert(PaymentChannels.StaleUpdate.selector);
-        ch.settle(id, 2, 300, _pre1);
-        bytes memory _pre2 = _sig(signerKey, id, 1, 300);
-        vm.expectRevert(PaymentChannels.StaleUpdate.selector);
-        ch.settle(id, 1, 300, _pre2);
-        // decreasing balance
+        ch.settle(id, 9, 300, _pre2); // higher seq, same balance: stale
+        // decreasing balance is stale too
         bytes memory _pre3 = _sig(signerKey, id, 3, 100);
-        vm.expectRevert(abi.encodeWithSelector(PaymentChannels.BadUpdate.selector, "balance may not decrease"));
+        vm.expectRevert(PaymentChannels.StaleUpdate.selector);
         ch.settle(id, 3, 100, _pre3);
         // over deposit
         bytes memory _pre4 = _sig(signerKey, id, 3, 501);
@@ -139,13 +137,13 @@ contract ChannelsTest is Test {
         vm.expectRevert(PaymentChannels.Unauthorized.selector);
         ch.settle(id, 3, 300, _pre5);
         // signature for a different channel id / seq / balance does not transfer
-        bytes memory sig = _sig(signerKey, id, 3, 300);
+        bytes memory sig = _sig(signerKey, id, 3, 400);
         vm.expectRevert(PaymentChannels.Unauthorized.selector);
-        ch.settle(id, 3, 301, sig);
+        ch.settle(id, 3, 401, sig);
         vm.expectRevert(PaymentChannels.Unauthorized.selector);
-        ch.settle(id, 4, 300, sig);
-        ch.settle(id, 3, 300, sig);
-        assertEq(usdc.balanceOf(payee), 300);
+        ch.settle(id, 4, 400, sig);
+        ch.settle(id, 3, 400, sig);
+        assertEq(usdc.balanceOf(payee), 400);
     }
 
     function test_close_cannot_be_finalised_early() public {
@@ -196,17 +194,22 @@ contract ChannelsTest is Test {
         assertEq(acc.balanceOf(root, address(usdc)), 9550);
     }
 
-    function test_signer_rotation_invalidates_old_updates() public {
+    /// AUDIT-2 A2-4: the signer at open is the key whose updates count for the channel's life, so a
+    /// rotation cannot void what the payee already holds; the current signer controls closing.
+    function test_signer_rotation_keeps_updates_valid_but_moves_close_authority() public {
         bytes32 id = _open(500, 60);
         bytes memory old = _sig(signerKey, id, 1, 100);
         vm.prank(owner);
         acc.rotateSigner(root, vm.addr(strangerKey));
+        ch.settle(id, 1, 100, old); // still valid
+        assertEq(usdc.balanceOf(payee), 100);
+        bytes memory byNew = _sig(strangerKey, id, 2, 200);
         vm.expectRevert(PaymentChannels.Unauthorized.selector);
-        ch.settle(id, 1, 100, old);
-        ch.settle(id, 1, 100, _sig(strangerKey, id, 1, 100)); // the new signer's updates are the valid ones
-        // and the new signer, not the old, controls closing
+        ch.settle(id, 2, 200, byNew); // the new signer never signed for this channel
         vm.prank(signer);
         vm.expectRevert(PaymentChannels.Unauthorized.selector);
+        ch.beginClose(id, 0, 0, "");
+        vm.prank(vm.addr(strangerKey));
         ch.beginClose(id, 0, 0, "");
     }
 

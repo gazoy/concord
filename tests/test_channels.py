@@ -127,3 +127,24 @@ def test_policy_allow_list_blocks_off_chain_signing(world):
         a.open_channel(other.address, ASSET, 10)
     cid = a.open_channel(payee.address, ASSET, 10)
     a.pay_channel(cid, 1)
+
+
+def test_payer_cannot_block_payee_by_jumping_seq(world):
+    """AUDIT-2 A2-1: updates are ordered by balance. A payer that signs a huge seq with the
+    balance already settled must not make the payee's higher updates stale."""
+    L, payee = world
+    a = make_agent(L, "a")
+    before = L.balance(payee.address, ASSET)
+    cid = a.open_channel(payee.address, ASSET, 100, timeout_secs=10)
+    a.pay_channel(cid, 10)
+    high = a.pay_channel(cid, 30)  # the payee holds a signed 40
+    # a dishonest payer bypasses its own signer and signs seq 2**64-1 at the settled balance (0),
+    # then closes on it
+    jump = sign(a.signer.keypair, {**high.body, "seq": 2**64 - 1, "balance": 0})
+    a.latest[cid] = jump
+    a.close_channel(cid)
+    # the payee's 40 still applies inside the window, whatever the seq
+    assert L.payee_contest_close(cid, high) == 40
+    L.advance(10)
+    a.finalize_close(cid)
+    assert L.balance(payee.address, ASSET) - before == 40

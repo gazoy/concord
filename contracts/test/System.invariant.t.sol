@@ -14,6 +14,11 @@ import {MockERC20} from "./MockERC20.sol";
 ///  - the root's spend window bounds everything committed out of the tree;
 ///  - closed channels and exited claims hold nothing.
 contract SystemHandler is Test {
+    function _epochOf(bytes32 pid_, bytes32 account_) internal view returns (uint64) {
+        uint64 e = pools.claimOf(pid_, account_).epoch;
+        return e == 0 ? 1 : e; // a not-yet-joined account will get epoch 1 on join
+    }
+
     AgentAccounts public acc;
     PaymentChannels public ch;
     Pools public pools;
@@ -121,20 +126,20 @@ contract SystemHandler is Test {
     }
 
     function _poolUpdate(uint256 k, bytes32 id, uint64 seq, uint256 b) internal view returns (Pools.Update memory) {
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(k, pools.updateDigest(pid, id, seq, b));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(k, pools.updateDigest(pid, id, _epochOf(pid, id), seq, b));
         return Pools.Update(id, seq, b, abi.encodePacked(r, s, v));
     }
 
     function exitPool(uint256 seed, uint64 seq, uint96 bal) external {
         uint256 i = _pick(seed);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(keys[i], pools.updateDigest(pid, ids[i], seq, bal));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(keys[i], pools.updateDigest(pid, ids[i], _epochOf(pid, ids[i]), seq, bal));
         vm.prank(vm.addr(keys[i]));
         try pools.beginExit(pid, ids[i], seq, bal, seed % 2 == 0 ? abi.encodePacked(r, s, v) : bytes("")) {} catch {}
     }
 
     function contestPool(uint256 seed, uint64 seq, uint96 bal) external {
         uint256 i = _pick(seed);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(keys[i], pools.updateDigest(pid, ids[i], seq, bal));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(keys[i], pools.updateDigest(pid, ids[i], _epochOf(pid, ids[i]), seq, bal));
         try pools.contestExit(pid, Pools.Update(ids[i], seq, bal, abi.encodePacked(r, s, v))) {} catch {}
     }
 

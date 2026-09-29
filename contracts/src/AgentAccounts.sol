@@ -370,7 +370,7 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
     }
 
     function _requirePayee(address payee) internal view {
-        if (payee == address(0) || payee == address(this)) revert BadPayee();
+        if (payee == address(0) || payee == address(this) || isModule[payee]) revert BadPayee();
     }
 
     /// @dev Pull `amount` of `token` from `from`; return what actually arrived (fee-on-transfer safe).
