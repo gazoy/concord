@@ -1,6 +1,6 @@
 # Cross-chain budget tree: simulation specification
 
-Version 1.0, 29 September 2026. Written before any simulation code. Changes after
+Version 1.1, 29 September 2026. Written before any simulation code. Changes after
 implementation begins are recorded in the change log at the end, with reasons.
 
 ## 1. Question
@@ -68,7 +68,10 @@ Per run:
 - `bound_rate`: max over t of (sum of B-side applied spends in (t − d, t]) as
   seen from A, and the symmetric quantity for B. This is the "rate × delay"
   quantity the hypothesis compares against.
-- `bound_caps`: sum of `per_window_max` of workers on the remote side.
+- `bound_caps`: the larger of the two sides' sums of worker `per_window_max`;
+  overshoot can originate from either side.
+- `h4_violations`: number of seconds t at which `seen_by_all(t) ≥ C` and a spend
+  was nonetheless applied.
 
 ## 4. Hypotheses and pass criteria
 
@@ -84,9 +87,11 @@ a defect in the design or the simulation.
 H3 (cap bound). `overshoot_max ≤ bound_caps` in every run: a remote branch can
 never exceed its own local caps, whatever the delay. Pass: 100% of runs.
 
-H4 (recovery). After the last spend, `overshoot_secs` counted from that point
-is at most `d`: once the relay catches up, both ledgers refuse until the window
-drains. Pass: 100% of runs.
+H4 (refusal lag ≤ d). Let `seen_by_all(t)` be the sum of applied spends with
+timestamp in (t − W, t − d]: every spend both ledgers have been told about and
+that is still inside the window at t. If `seen_by_all(t) ≥ C` then no spend is
+applied at t on either ledger. Pass: 100% of runs. (Revised in 1.1; see change
+log.)
 
 H5 (depth independence). Adding the sub-worker level does not increase
 `overshoot_max` beyond the H2 bound. Pass: H2 holds with depth 2.
@@ -156,3 +161,15 @@ unedited.
 ## Change log
 
 - 1.0: initial.
+- 1.1 (after first smoke run): H4 rewritten. The 1.0 wording measured
+  `overshoot_secs` after the last spend and required it to be ≤ d, which
+  conflates two things: the relay catching up (d seconds) and the sliding
+  window draining (up to W seconds). True committed value legitimately stays
+  above C until old spends age out, whatever the relay does. The property the
+  relay is responsible for is that refusal recovers within d, which is what 1.1
+  states. The 1.0 metric is kept in the CSV as `overshoot_after_last` for the
+  record but is no longer a pass criterion. Also: `bound_caps` clarified as the
+  max over sides, since overshoot can come from either.
+- 1.1: relay delivery runs both before and after each second's spends so that
+  d = 0 means "seen within the same second"; the 1.0 code delivered only before,
+  which made d = 0 behave as d = 1 and was caught by the §6 window invariant.
