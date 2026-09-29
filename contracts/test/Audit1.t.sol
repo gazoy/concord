@@ -774,4 +774,174 @@ contract Audit1Test is Test {
         vm.expectRevert(AgentAccounts.ZeroAmount.selector);
         acc.refund(root, address(usdc), 0);
     }
+
+    // ============================================== VERIFICATION, ROUND 3 (commit 3173e83)
+
+    /// VERIFY-3 bucketLen: 31 * ceil(w/31) >= w for the edge widths, the over-shoot is < 31, and the
+    /// bucket end fits uint64 for any uint32 window at any plausible timestamp.
+    function test_V3_bucket_len_arithmetic() public pure {
+        uint32[6] memory ws = [uint32(1), 2, 31, 32, 33, type(uint32).max];
+        for (uint256 i = 0; i < ws.length; i++) {
+            uint256 w = ws[i];
+            uint256 l = (w + 32 - 2) / 31;
+            assertGe(l, 1);
+            assertGe(31 * l, w, "ring period must cover the window");
+            assertLt(31 * l - w, 31);
+            uint256 now_ = type(uint40).max; // year 36812
+            uint256 end = (now_ / l) * l + l - 1;
+            assertLe(end, type(uint64).max);
+            assertGe(end, now_);
+            assertLt(end - now_, l);
+        }
+    }
+
+    /// VERIFY-3 same window, no admin change: a spend at the FIRST second of a bucket counts for
+    /// exactly W + bucketLen - 1 seconds (never less than W, the documented over-count at most), a
+    /// spend at the LAST second of a bucket counts for exactly W (matches the reference), and the
+    /// slot reused one ring period later is stale even in the tightest case (last second of bucket
+    /// B-32 versus first second of bucket B: 31*bucketLen + 1 > W).
+    function test_V3_same_window_boundaries_and_ring_reuse() public {
+        // W = 3600 -> bucketLen 117, ring period 3744; 1_000_000 = 8547*117 + 1
+        uint256 L = 117;
+        bytes32 root = _register(owner, rootSigner, _policy(1000, 1000, 3600), 0);
+        _fund(root, 100_000);
+        uint256 tFirst = 8548 * L;          // first second of bucket 8548
+        vm.warp(tFirst);
+        _spend(root, rootSigner, 400);
+        vm.warp(tFirst + 3600 - 1);
+        assertEq(acc.spentInWindow(root), 400);          // still inside W (reference agrees)
+        vm.warp(tFirst + 3600);
+        assertEq(acc.spentInWindow(root), 400);          // reference would drop here; contract over-counts...
+        vm.warp(tFirst + 3600 + L - 2);
+        assertEq(acc.spentInWindow(root), 400);          // ...for at most bucketLen - 1 seconds
+        vm.warp(tFirst + 3600 + L - 1);
+        assertEq(acc.spentInWindow(root), 0);
+        _spend(root, rootSigner, 1000);                  // and the full cap is available again
+
+        // last second of a bucket: exact
+        bytes32 r2 = _register(owner, sibSigner, _policy(1000, 1000, 3600), 1);
+        _fund(r2, 100_000);
+        uint256 tLast = 9000 * L + L - 1;
+        vm.warp(tLast);
+        vm.prank(sibSigner);
+        acc.transfer(r2, address(usdc), payee, 1000, "", 0);
+        vm.warp(tLast + 3600 - 1);
+        vm.prank(sibSigner);
+        vm.expectRevert(abi.encodeWithSelector(AgentAccounts.PolicyViolation.selector, "amount would exceed per_window_max"));
+        acc.transfer(r2, address(usdc), payee, 1, "", 0);
+        vm.warp(tLast + 3600);
+        assertEq(acc.spentInWindow(r2), 0);
+
+        // tightest ring reuse: last second of bucket B-32, then first second of bucket B
+        bytes32 r3 = _register(owner, childSigner, _policy(1000, 1000, 3600), 2);
+        _fund(r3, 100_000);
+        uint256 tA = 9100 * L + L - 1;
+        uint256 tB = 9132 * L; // tB - tA = 31*L + 1 = 3628 > 3600
+        vm.warp(tA);
+        vm.prank(childSigner);
+        acc.transfer(r3, address(usdc), payee, 1000, "", 0);
+        vm.warp(tB);
+        assertEq(acc.spentInWindow(r3), 0, "reused slot must be stale");
+        vm.prank(childSigner);
+        acc.transfer(r3, address(usdc), payee, 1000, "", 0); // restart, not merge
+        vm.warp(tB + 3600 - 1);
+        assertEq(acc.spentInWindow(r3), 1000, "the new spend must count for a full window");
+        vm.warp(tB + 3600 + L - 1);
+        assertEq(acc.spentInWindow(r3), 0);
+    }
+
+    /// VERIFY-3 adversarial admin alternation: each window change lets one merge raise a live
+    /// slot's end by less than (W_new + bucketLen_new - 1); value is then counted until end + W.
+    /// Worst case for a unit recorded at t under (W0, L0), with c changes each followed by a merge:
+    ///   counted until  t + (L0 - 1) + sum_i (W_i + L_i - 1) + W_final
+    /// and never dropped before t + W_current. Two changes (3600 -> 7200 -> 3600) exercised with
+    /// hand-picked timestamps that land on the live slot; the bound holds and nothing under-counts.
+    function test_V3_window_change_extension_bound() public {
+        uint256 L1 = 117; uint256 L2 = 233; // ceil(3600/31), ceil(7200/31)
+        bytes32 root = _register(owner, rootSigner, _policy(1000, 1000, 3600), 0);
+        _fund(root, 100_000);
+        uint256 t0 = 1_000_000;           // bucket 8547 on the 117-grid (slot 3), end 1_000_115
+        vm.warp(t0);
+        _spend(root, rootSigner, 1);
+        vm.prank(owner);
+        acc.setPolicy(root, _policy(1000, 1000, 7200));
+        uint256 t1 = 4323 * L2;           // 1_007_259: bucket 4323 on the 233-grid, slot 3, old end still live under 7200
+        vm.warp(t1);
+        assertEq(acc.spentInWindow(root), 1);
+        _spend(root, rootSigner, 10);     // merge: end -> 1_007_491
+        uint256 end1 = 4323 * L2 + L2 - 1;
+        assertEq(end1, 1_007_491);
+        vm.prank(owner);
+        acc.setPolicy(root, _policy(1000, 1000, 3600));
+        uint256 t2 = 8611 * L1;           // 1_007_487: slot 3 on the 117-grid, end1 still live under 3600
+        vm.warp(t2);
+        assertEq(acc.spentInWindow(root), 11);
+        _spend(root, rootSigner, 100);    // merge: end -> 1_007_603
+        uint256 end2 = 8611 * L1 + L1 - 1;
+        assertEq(end2, 1_007_603);
+        // never under-count: every unit counted for at least the current window after its own spend
+        vm.warp(t2 + 3600 - 1);
+        assertEq(acc.spentInWindow(root), 111);
+        // all dropped together at end2 + W
+        vm.warp(end2 + 3600 - 1);
+        assertEq(acc.spentInWindow(root), 111);
+        vm.warp(end2 + 3600);
+        assertEq(acc.spentInWindow(root), 0);
+        // the unit from t0 was counted for (end2 + 3600 - t0) seconds; check the formula bound
+        uint256 counted = end2 + 3600 - t0;
+        uint256 bound = (L1 - 1) + (7200 + L2 - 1) + (3600 + L1 - 1) + 3600;
+        assertLe(counted, bound);
+        // and the documented fuzz bound (w + mb) + changes * (wMax + mb) with mb = ceil(7200/31)
+        assertLe(counted, (3600 + L2) + 2 * (7200 + L2));
+    }
+
+    /// VERIFY-3 lengthening a window resurrects stale buckets (over-count only) and a spend into a
+    /// resurrected slot whose old end is later than the current bucket's end keeps the later end.
+    function test_V3_lengthen_resurrects_and_keeps_later_end() public {
+        // 30-day window: bucketLen 83_613; then 1-hour window: bucketLen 117
+        bytes32 root = _register(owner, rootSigner, _policy(1000, 1000, 30 days), 0);
+        _fund(root, 100_000);
+        uint256 Lbig = (uint256(30 days) + 30) / 31;
+        uint256 t0 = 1_000_000;
+        vm.warp(t0);
+        _spend(root, rootSigner, 1);
+        uint256 bigEnd = (t0 / Lbig) * Lbig + Lbig - 1;
+        vm.prank(owner);
+        acc.setPolicy(root, _policy(1000, 1000, 3600));
+        // find a time in (t0, bigEnd] on the 117-grid that maps to the same slot index
+        uint256 slot = (t0 / Lbig) % 32;
+        uint256 b = t0 / 117 + 1;
+        while (b % 32 != slot) b++;
+        uint256 t1 = b * 117;
+        assertLe(t1, bigEnd);
+        vm.warp(t1);
+        assertEq(acc.spentInWindow(root), 1); // live under the new window too
+        _spend(root, rootSigner, 5);          // merges; end stays bigEnd (later than this bucket's end)
+        vm.warp(bigEnd + 3600 - 1);
+        assertEq(acc.spentInWindow(root), 6); // conservative: counted until bigEnd + W
+        vm.warp(bigEnd + 3600);
+        assertEq(acc.spentInWindow(root), 0);
+        // the over-count for the 5 is < Lbig + W, inside the documented (w + mb) base
+        assertLt(bigEnd + 3600 - t1, 3600 + Lbig);
+    }
+
+    /// VERIFY-3 A1-11: the co-signer can revoke its own approval and revocation is logged.
+    function test_V3_cosigner_revoke_and_event() public {
+        AgentAccounts.PolicyInput memory p = _policy(100, 100_000, 3600);
+        p.escalation = esc;
+        bytes32 root = _register(owner, rootSigner, p, 0);
+        _fund(root, 100_000);
+        uint64 d = uint64(block.timestamp + 100);
+        bytes memory sig = _escSigD(root, payee, 500, d);
+        vm.expectEmit(true, false, false, true, address(acc));
+        emit AgentAccounts.EscalationRevoked(root, esc, 1);
+        vm.prank(esc);
+        acc.revokeEscalation(root);
+        vm.prank(rootSigner);
+        vm.expectRevert(AgentAccounts.BadEscalation.selector);
+        acc.transfer(root, address(usdc), payee, 500, sig, d);
+        vm.prank(other);
+        vm.expectRevert(AgentAccounts.Unauthorized.selector);
+        acc.revokeEscalation(root);
+    }
 }

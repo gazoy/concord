@@ -416,3 +416,78 @@ and green. The rework is small (one function and one constant) and the reproduct
 | A1-11 Info | Fixed. The co-signer may call `revokeEscalation`; `EscalationRevoked` event; deadline 0 documented as always expired. |
 
 New test `test/WindowFuzz.t.sol`: 5,000 random sequences of spends at random times (concentrated at bucket edges and window boundaries) with administrator window changes in both directions, compared against an in-test copy of the reference `SpendWindow` (which prunes permanently at each check). Asserts the contract never counts less than the reference, and never more than everything recorded within `W + bucketLen` plus one further `Wmax + bucketLen` per window change. That last clause is the one behaviour worth knowing: after an administrator changes the window, value may count for longer than the new window (never shorter), because a live bucket can be merged under a later end. It is stated in the contract header. Reproductions A1-9/A1-9b/A1-10 now assert `>=` (never under-count) and pass; boundary tests were relaxed by one bucket length. 50 tests pass; Slither unchanged (three informational).
+
+## 8. Verification, round 3 (auditor, 29 Sep 2026, commit 3173e83)
+
+Method: re-read `Slot`, `_record`, `spentInWindowOf`, `_cutoff`, `revokeEscalation` and the header
+claim; proved the window properties by hand (below); appended 5 tests to `test/Audit1.t.sol`
+(`test_V3_*`) covering the edge widths, bucket-edge timings, the tightest ring reuse, a two-change
+adversarial alternation with hand-placed merges, resurrection under a lengthened window, and the
+co-signer revoke. `forge test`: 55 of 55 pass (35 in Audit1, 16 unit, 3 invariant, 1 window fuzz).
+`src/` untouched.
+
+### 8.1 Status
+
+| Finding | Status | Evidence |
+| --- | --- | --- |
+| A1-9 High, ring did not cover W | **Closed** | `bucketLen = ceil(W/31)` gives `31*bucketLen >= W` for every uint32 W (checked at 1, 2, 31, 32, 33 and 2^32-1; overshoot < 31). At reuse the old slot's end is `(B-31)*bucketLen - 1 <= now - W` for all `now >= B*bucketLen`, so it is always stale. Tightest case tested (last second of bucket B-32, first second of B: 31*117+1 = 3628 > 3600). A1-9 and A1-9b reproductions pass. |
+| A1-10 Medium, first-timestamp liveness | **Closed** | Liveness is by bucket END. A spend at the first second of a bucket counts for exactly W + bucketLen - 1 seconds, at the last second for exactly W (reference-exact); nothing is dropped before W. A1-10 reproduction passes. |
+| A1-11 Info, co-signer revoke / event | **Closed** | `revokeEscalation` accepts `policy.escalation`; `EscalationRevoked(id, by, newNonce)` emitted; strangers still refused. |
+
+### 8.2 Proofs requested
+
+**Never-under-count, any sequence including admin changes.** A slot's `end` is set on restart to
+`curEnd >= now` and otherwise only ever raised (`max`), so for every unit recorded at `t`,
+`end >= t` for as long as the unit is in the slot. A slot is counted while `end > now - W_cur`,
+hence at least while `now < t + W_cur`, which is exactly the reference's rule. A slot is
+overwritten only when `end <= now - W_cur`, at which point every unit in it is at least `W_cur`
+old and the reference has dropped it too. So no timing, with or without changes, drops a unit
+before `W_cur` seconds. This does not depend on the ring period at all; the ring period only
+bounds the over-count.
+
+**Ring reuse is stale (same window).** Slot for bucket B was last written by bucket B-32 with
+`end <= (B-31)*L - 1`. For any `now >= B*L`, `now - W >= B*L - W >= B*L - 31L = (B-31)*L > end`.
+The `uint64` cast is safe: `end < now + L <= 2^40 + 2^28`.
+
+**Maximum time a unit is counted.** Let the unit be recorded at `t` under `(W0, L0)`, with `c`
+subsequent admin window changes each followed by a merge into the unit's live slot under
+`(W_i, L_i)`, and `W_final` the window in force at the check. A merge can raise `end` only while
+`end > now - W_i`, to at most `now + L_i - 1`, so by less than `W_i + L_i - 1`; a same-grid spend
+never raises it (ring argument), so at most one raise per change. Therefore
+
+    counted until  <  t + (L0 - 1) + sum_{i=1..c} (W_i + L_i - 1) + W_final
+    counted until  >= t + W_final                                (never less)
+
+If the unit was recorded straight into a live slot left over from an earlier, longer window,
+`L0` is that earlier window's bucket length (the slot keeps the later end). Both terms are within
+the fuzz test's `(w + mb) + changes*(wMax + mb)` with `mb = ceil(wMax/31)`, so the documented
+bound is correct and slightly loose (by `c + 1` seconds and by using `wMax` for every term). An
+admin alternating windows adversarially therefore adds at most one `(W + bucketLen)` of
+over-count per change, and only ever against the signer's own budget. Verified with two
+hand-placed merges (3600 -> 7200 -> 3600) in `test_V3_window_change_extension_bound` and a
+30-day -> 1-hour resurrection in `test_V3_lengthen_resurrects_and_keeps_later_end`.
+
+**Divide-before-multiply** (`bucket = now / L; curEnd = bucket*L + L - 1`): intentional floor to
+the bucket start; the truncation is the point. No issue.
+
+### 8.3 New findings
+
+**A1-12 Informational: header understates the per-change over-count.** Line 35-36 says a change
+may extend counting "up to one further window"; the exact bound is one further window plus one
+bucket less one second, `W_i + L_i - 1`, and the base term after a change to a shorter window is
+the earlier window's `bucketLen`, not the current one. The fuzz test already uses the correct
+(`W + bucketLen`) form. Wording only.
+
+No other findings. Nothing under Low.
+
+### 8.4 Verdict
+
+The spend window is now sound: it never counts less than the reference under any sequence of
+spends and administrator changes, its over-count is bounded by the formula above and is always
+in the conservative direction, and its cost is constant. All round-1 and round-2 findings are
+closed (A1-7 accepted as a documented trust boundary). AgentAccounts is fit to proceed to the
+channel and pool modules and to a Fuji deployment, on two conditions carried forward: the
+modules must authenticate the signer themselves before calling `commit` (A1-7), and rebasing
+tokens remain unsupported (A1-2 note). The channel/pool modules should be audited before mainnet
+with the same adversarial pass, and this contract's `commit`/`refund` interplay with them
+re-checked at that time.

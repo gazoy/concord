@@ -31,8 +31,9 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 ///    counts for at least windowSecs and, while the window is unchanged, at most
 ///    windowSecs + bucketLen - 1: the on-chain window can only be more conservative
 ///    than the reference (A1-9, A1-10). When an administrator changes windowSecs, a
-///    live bucket may be merged under a later end, so recorded value may count for up
-///    to one further window per change; never for less;
+///    live bucket may be merged under a later end: value recorded at t under (W0, L0)
+///    is counted until at most t + (L0 - 1) + sum over changes of (W_i + L_i - 1) + W_final,
+///    and never until less than t + W_final (AUDIT-1 section 8);
 ///  * payees may not be this contract or the zero address (A1-3); deposits and
 ///    refunds credit the amount actually received (A1-2).
 contract AgentAccounts is ReentrancyGuard, EIP712 {
@@ -463,6 +464,7 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
         uint256 w = a.policy.windowSecs;
         uint256 bucketLen = (w + SLOTS - 2) / (SLOTS - 1); // ceil(w / (SLOTS-1)), >= 1
         uint256 bucket = block.timestamp / bucketLen;
+        // slither-disable-next-line divide-before-multiply  (floor to the bucket start, intended)
         uint64 curEnd = uint64(bucket * bucketLen + bucketLen - 1);
         // slither-disable-next-line weak-prng  (a bucket index, not randomness)
         Slot storage sl = a.window[bucket % SLOTS];

@@ -4,7 +4,7 @@ Solidity port of the reference implementation in `../foliant/`. Foundry project.
 
 | Contract | Reference | Status |
 | --- | --- | --- |
-| `AgentAccounts` | `accounts.py`, account half of `ledger.py` | tests + invariants, Slither clean, audit pending |
+| `AgentAccounts` | `accounts.py`, account half of `ledger.py` | 55 tests (unit, fuzz, invariant, window-vs-reference), Slither clean, [AUDIT-1](audits/AUDIT-1.md): 12 findings, all closed over three rounds |
 
 ```
 forge build && forge test
