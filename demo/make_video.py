@@ -22,7 +22,7 @@ BG, TERM, INK, DIM, ACCENT, CAP_BG = "#0F1B2D", "#0B1424", "#E6E9EF", "#8A97AB",
 # Each segment: seconds, terminal lines to reveal (typed or printed), caption, script line.
 SEGMENTS = [
     (5.0, [("$", "python demo/run_demo.py")], "Foliant: payments for AI agents, with the spend cap on the account.",
-     "This is the Foliant reference implementation. One command runs four scenarios in about a second. I'll talk through what each one shows."),
+     "This is the Foliant reference implementation. One command runs five scenarios in about a second. I'll talk through what each one shows."),
     (7.0, [("h", "A. one agent, one channel, 20 calls"),
            ("o", "  channel 9310996d: deposit 100, on-chain settled 0, off-chain owed 60"),
            ("o", "  chain transfers so far: 2  (open only; no per-call transactions)")],
@@ -46,12 +46,19 @@ SEGMENTS = [
            ("o", "  bob refunded 70; exited=True")],
      "D. The provider vanishes. Bob leaves the pool alone and gets his 70 back.",
      "Scenario D: what if the provider vanishes? Bob exits the pool on his own and gets his unspent seventy back after the timeout. Nobody's funds depend on the coordinator being honest or online."),
-    (5.0, [("o", "supply check: 51000 == minted 51000")],
+    (12.0, [("h", "E. a crew: orchestrator delegates budgets to three workers; the tree bounds the crew"),
+            ("o", "  each worker may commit 100; the crew as a whole may commit 150. after 48 calls: amount 50 would exceed per_window_max 150 (already spent 150)"),
+            ("o", "  committed: workers [50, 50, 50], orchestrator 150 = crew total"),
+            ("o", "  orchestrator revokes worker 3 with its own signer, no human in the loop: policy expired"),
+            ("o", "  and recalls its unspent 950; provider settles every open channel, the crew included, in one call: +342")],
+     "E. A crew. Each worker could spend 100; the crew stops at 150. The orchestrator revokes a worker itself.",
+     "Scenario E is a crew. The orchestrator has a budget of one hundred and fifty and delegates one hundred to each of three workers, with its own key, no human involved. Each worker could spend a hundred, but the crew as a whole stops at one hundred and fifty: the next deposit is refused because every spend is checked against every level of the tree. Then the orchestrator revokes worker three itself and takes back the unspent balance. That is what a crew budget means."),
+    (5.0, [("o", "supply check: 61000 == minted 61000")],
      "Every unit accounted for.",
      "And the supply check: every unit is accounted for."),
-    (7.0, [("$", "pytest -q"), ("o", "......................                                                   [100%]"), ("o", "22 passed in 3.23s")],
-     "22 tests, including property-based invariants. github.com/gazoy/concord",
-     "Twenty-two tests back this, including property-based checks over hundreds of random sessions: a payee never gets more than the payer signed, a payer always gets the rest back, and the policy window is never exceeded. The code is public at github.com/gazoy/concord."),
+    (7.0, [("$", "pytest -q"), ("o", "..................................                                       [100%]"), ("o", "34 passed in 2.11s")],
+     "34 tests, including property-based invariants over random budget trees. foliant.network",
+     "Thirty-four tests back this, including property-based checks over hundreds of random sessions and random budget trees: a payee never gets more than the payer signed, a payer always gets the rest back, and no branch of a crew ever exceeds any ancestor's cap. The code is public at foliant.network."),
 ]
 
 
@@ -82,15 +89,18 @@ def render(term_lines, caption, seg_index, total):
     d.rounded_rectangle((72, 96, W - 72, 800), radius=16, fill=TERM, outline="#2A3A58", width=2)
     for i, c in enumerate(("#FF5F57", "#FEBC2E", "#28C840")):
         d.ellipse((96 + i * 28, 116, 112 + i * 28, 132), fill=c)
-    y = 160
-    for kind, text in term_lines[-20:]:
+    # wrap everything, then show the last rows that fit: a terminal scrolls
+    rows: list[tuple[str, str]] = []
+    for kind, text in term_lines:
         color = {"$": ACCENT, "h": INK, "o": "#B8C4D6"}[kind]
         prefix = "$ " if kind == "$" else ""
         for line in wrap(d, prefix + text, f_mono, W - 200):
-            d.text((104, y), line, font=f_mono, fill=color)
-            y += 34
-        if kind == "h":
-            pass
+            rows.append((line, color))
+    max_rows = (800 - 160 - 20) // 34
+    y = 160
+    for line, color in rows[-max_rows:]:
+        d.text((104, y), line, font=f_mono, fill=color)
+        y += 34
     # caption band
     d.rounded_rectangle((72, 832, W - 72, 1040), radius=16, fill=CAP_BG)
     lines = wrap(d, caption, f_cap, W - 240)
