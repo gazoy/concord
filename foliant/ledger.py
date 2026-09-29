@@ -50,6 +50,8 @@ class Ledger:
         self.balances.setdefault(address, {})[asset] = self.balance(address, asset) + amount
 
     def _move(self, t: Transfer) -> None:
+        if t.amount < 0:
+            raise InvalidUpdate("negative amount")
         if self.balance(t.src, t.asset) < t.amount:
             raise InsufficientFunds(f"{t.src} has {self.balance(t.src, t.asset)} {t.asset}, needs {t.amount}")
         self.balances[t.src][t.asset] -= t.amount
@@ -175,6 +177,8 @@ class Ledger:
     # value-moving ops: policy check via acct.authorise before any transfer
 
     def _require_funds(self, address: str, asset: str, amount: int) -> None:
+        if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
+            raise InvalidUpdate("amount must be a positive integer")
         if self.balance(address, asset) < amount:
             raise InsufficientFunds(f"{address} has {self.balance(address, asset)} {asset}, needs {amount}")
 
@@ -260,6 +264,7 @@ class Ledger:
         child = AgentAccount(cid, acct.owner, signer, policy, None, parent=acct.id)
         self.accounts[cid] = child
         if b.get("fund"):
+            self._require_funds(acct.address, b["asset"], b["fund"])
             self._move(Transfer(acct.address, child.address, b["asset"], b["fund"]))
         return {"account_id": cid}
 
@@ -269,6 +274,8 @@ class Ledger:
         if not self.is_descendant(child.id, acct.id):
             raise Unauthorized("recall target is not a descendant")
         amount = b["amount"] if b.get("amount") is not None else self.balance(child.address, b["asset"])
+        if amount < 0:
+            raise InvalidUpdate("negative amount")
         if amount:
             self._move(Transfer(child.address, acct.address, b["asset"], amount))
         return {"recalled": amount}

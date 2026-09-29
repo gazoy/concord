@@ -155,6 +155,73 @@ def test_signer_window_rolls_back_when_ledger_refuses(world):
     with pytest.raises(PolicyViolation):
         b.transfer(OUTSIDE, ASSET, 50)  # b's own policy allows it; the root refuses
     assert b.signer.window.spent(L.now, HOUR) == 0 == b.account.window.spent(L.now, HOUR)
-    with pytest.raises(Exception):
-        b.transfer(OUTSIDE, ASSET, 1_000)  # insufficient funds path, same rollback
-    assert b.signer.window.spent(L.now, HOUR) == 0
+
+
+def test_validation_precedes_recording(world):
+    """Audit D12/N3: a transaction that fails after the policy check leaves no window entries anywhere."""
+    from foliant.errors import InsufficientFunds, InvalidUpdate
+    L, payee = world
+    root = make_agent(L, "root", Policy(per_tx_max=10_000, per_window_max=10_000, window_secs=HOUR))
+    c = root.delegate(KeyPair.from_seed(b"c"), Policy(per_tx_max=10_000, per_window_max=10_000, window_secs=HOUR), fund=100, asset=ASSET)
+
+    def windows():
+        return (c.signer.window.spent(L.now, HOUR), c.account.window.spent(L.now, HOUR), root.account.window.spent(L.now, HOUR))
+
+    with pytest.raises(InsufficientFunds):
+        c.transfer(OUTSIDE, ASSET, 500)  # policy allows 500; funds are 100
+    assert windows() == (0, 0, 0)
+    cid = c.open_channel(payee.address, ASSET, deposit=10)
+    with pytest.raises(InvalidUpdate):
+        c.open_channel(payee.address, ASSET, deposit=10)  # same salt: channel exists
+    assert windows() == (10, 10, 10)
+    pool = L.create_pool(payee.address, ASSET, timeout_secs=10, bond=0)
+    c.join_pool(pool.id, 10)
+    with pytest.raises(InvalidUpdate):
+        c.join_pool(pool.id, 10)  # already a member
+    assert windows() == (20, 20, 20)
+
+
+def test_no_negative_or_zero_value_moves(world):
+    """Audit N4: a negative transfer inside the tree must not create money."""
+    from foliant.errors import InvalidUpdate
+    L, _ = world
+    root = make_agent(L, "root", Policy(per_tx_max=1_000, per_window_max=1_000, window_secs=HOUR))
+    c = root.delegate(KeyPair.from_seed(b"c"), Policy(per_tx_max=1_000, per_window_max=1_000, window_secs=HOUR), fund=100, asset=ASSET)
+    supply = L.total_supply(ASSET)
+    for amt in (-5_000, 0, -1):
+        env = c.signer.sign_plain({"account": c.account.id, "nonce": c.account.nonce, "op": "transfer",
+                                   "to": root.account.address, "asset": ASSET, "amount": amt})
+        with pytest.raises(InvalidUpdate):
+            L.apply(env)
+        env = c.signer.sign_plain({"account": c.account.id, "nonce": c.account.nonce, "op": "transfer",
+                                   "to": OUTSIDE, "asset": ASSET, "amount": amt})
+        with pytest.raises((InvalidUpdate, PolicyViolation)):
+            L.apply(env)
+    with pytest.raises(InvalidUpdate):
+        root.recall(c, ASSET, amount=-50)
+    with pytest.raises(InvalidUpdate):
+        root.delegate(KeyPair.from_seed(b"d"), Policy(per_tx_max=1, per_window_max=1, window_secs=HOUR), fund=-5, asset=ASSET, salt=7)
+    assert L.total_supply(ASSET) == supply
+    assert all(v >= 0 for bal in L.balances.values() for v in bal.values())
+
+
+@settings(max_examples=40, deadline=None)
+@given(ops=st.lists(st.tuples(st.integers(0, 2), st.integers(1, 400)), min_size=1, max_size=40))
+def test_signer_window_equals_ledger_window(ops):
+    """Audit N8: after any mix of accepted and refused ops, the enclave's window equals the ledger's."""
+    from foliant import Ledger
+    L = Ledger()
+    root = make_agent(L, "root", Policy(per_tx_max=300, per_window_max=500, window_secs=HOUR), funds=10_000)
+    c = root.delegate(KeyPair.from_seed(b"c"), Policy(per_tx_max=300, per_window_max=500, window_secs=HOUR), fund=600, asset=ASSET)
+    payee = KeyPair.from_seed(b"p").address
+    for kind, amt in ops:
+        try:
+            if kind == 0:
+                c.transfer(OUTSIDE, ASSET, amt)
+            elif kind == 1:
+                c.open_channel(payee, ASSET, deposit=amt, salt=amt)
+            else:
+                root.transfer(OUTSIDE, ASSET, amt)  # consumes the root's window; may make c's next spend refused
+        except Exception:
+            pass
+        assert c.signer.window.spent(L.now, HOUR) == c.account.window.spent(L.now, HOUR)

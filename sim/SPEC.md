@@ -1,6 +1,6 @@
 # Cross-chain budget tree: simulation specification
 
-Version 1.3, 29 September 2026. Written before any simulation code. Changes after
+Version 1.4, 29 September 2026. Written before any simulation code. Changes after
 implementation begins are recorded in the change log at the end, with reasons.
 
 ## 1. Question
@@ -72,10 +72,12 @@ Per run:
 - `bound_rate`: max over t of (sum of B-side applied spends in (t − d, t]) as
   seen from A, and the symmetric quantity for B. This is the "rate × delay"
   quantity the hypothesis compares against.
-- `bound_caps`: min(C, the larger side's sum of leaf `per_window_max`).
+- `bound_caps`: min(C, the larger side's sum of worker `per_window_max`). A
+  sub-worker's spends are recorded in its worker's window, so a worker subtree
+  is capped at the worker's cap at either depth.
   Overshoot can originate from either side, and each ledger caps its own local
   spends at C, so this is the tightest structural bound available per run.
-- `slack_caps`: the sum of all leaf caps on both sides minus C. Overshoot can
+- `slack_caps`: the sum over sides of min(C, that side's worker caps), minus C. Overshoot can
   never exceed this either, and in cells where the sum of caps is below C it
   is the binding bound.
 - `tight_violations`: number of seconds t at which overshoot(t) exceeded the
@@ -254,3 +256,14 @@ unedited.
   produced by the code (D13); split-brain funding and clock skew added to §8
   (D14, threats 1-2). `window_secs` and `escalation` are deliberately not
   compared by `Policy.within`, for the reasons now in its docstring.
+- 1.4 (after the second independent audit, sim/AUDIT-2.md): cap bounds
+  corrected for depth 2 (N1) and tightened per side; the H3 columns of the
+  existing results.csv were recomputed with the corrected formula rather than
+  the sweep rerun, since they are derived from unchanged run outputs; the
+  report generator handles invariant-error rows (N2); invariants raise rather
+  than `assert` (N5); regression tests added for validation-before-recording
+  (N3), for non-positive value moves (N4, a pre-existing library bug fixed in
+  `Ledger._move` and `_require_funds`), and a property test that the signer's
+  window equals the ledger's after mixed accepted and refused operations (N8).
+  RESULTS.md wording corrected per AUDIT-2 §4 (N9). Not done: the reverse
+  direction of the spend-time invariant (N6), recorded as a limitation.
