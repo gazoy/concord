@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import Depends, FastAPI, Request, Response
 
 from foliant import KeyPair, Ledger, ServiceOffer
+from foliant.node import ledger_router
 from foliant.x402 import Payment, PaymentGate, install
 
 
@@ -11,6 +12,7 @@ def build_app(ledger: Ledger, provider: KeyPair, offer: ServiceOffer) -> tuple[F
     gate = PaymentGate(ledger, offer, provider)
     app = FastAPI(title="Foliant metered API")
     install(app)
+    app.include_router(ledger_router(ledger))  # the devnet ledger, so clients in other languages can pay
 
     @app.post("/infer")
     async def infer(request: Request, payment: Payment = Depends(gate.dependency())):

@@ -9,7 +9,7 @@ description = "Foliant reference implementation: agent accounts with hierarchica
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
-dependencies = ["cryptography>=42", "fastapi>=0.110", "httpx>=0.27"]
+dependencies = ["cryptography>=42", "fastapi>=0.110", "httpx>=0.27", "uvicorn>=0.30"]
 
 [project.urls]
 Homepage = "https://foliant.network"
