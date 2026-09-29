@@ -47,6 +47,15 @@ pytest                      # 34 tests incl. property-based invariants
 python sim/crosschain.py --quick   # cross-ledger budget-tree simulation, smoke run
 ```
 
+## Packages
+
+| Package | Registry | What it is |
+| --- | --- | --- |
+| `foliant-protocol` | [PyPI](https://pypi.org/project/foliant-protocol/) | This reference implementation and Python SDK (`import foliant`) |
+| `langchain-foliant` | [PyPI](https://pypi.org/project/langchain-foliant/) | LangChain tool, budget middleware and crew helper ([source](https://github.com/gazoy/langchain-foliant)) |
+| `foliant-client` | [npm](https://www.npmjs.com/package/foliant-client) | TypeScript client, byte-compatible with the reference ([source](https://github.com/gazoy/foliant-js)) |
+| `elizaos-plugin-foliant` | [npm](https://www.npmjs.com/package/elizaos-plugin-foliant) | ElizaOS plugin: `PAY_X402` action and `FOLIANT_BUDGET` provider ([source](https://github.com/gazoy/plugin-foliant)) |
+
 ## Layout
 
 | Path | Whitepaper | What it holds |
