@@ -22,7 +22,14 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 ///  * payees are addresses; the only moves inside a tree are delegate and recall;
 ///  * allow and deny lists are bounded arrays (MAX_LIST) so `within` can compare them;
 ///  * escalation is an EIP-712 signature by the policy's co-signer over the exact
-///    spend, replay-protected by a per-account escalation nonce.
+///    spend, replay-protected by a per-account escalation nonce and a deadline;
+///  * the spend window is a fixed ring of SLOTS time buckets rather than a list of
+///    entries, so the cost of a spend is independent of how many spends preceded it
+///    (AUDIT-1 A1-1). Bucketing can only over-count: value recorded in a bucket
+///    counts until the bucket's first timestamp leaves the window, so the on-chain
+///    window is at most 2/SLOTS of `windowSecs` more conservative than the reference;
+///  * payees may not be this contract or the zero address (A1-3); deposits and
+///    refunds credit the amount actually received (A1-2).
 contract AgentAccounts is ReentrancyGuard, EIP712 {
     using SafeERC20 for IERC20;
 
@@ -50,7 +57,8 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
         address[] denyList;
     }
 
-    struct Entry {
+    /// One time bucket of the spend window: the earliest timestamp recorded in it, and the total.
+    struct Slot {
         uint64 ts;
         uint128 amount;
     }
@@ -62,16 +70,17 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
         uint64 escalationNonce;
         bool exists;
         Policy policy;
-        Entry[] window;         // rolling record of committed value
-        uint256 windowHead;     // entries before this index have been pruned
+        Slot[32] window;        // bucketed record of committed value (SLOTS)
     }
 
     // -------------------------------------------------------------- constants
 
     uint256 public constant MAX_LIST = 32;
+    uint256 public constant SLOTS = 32;
+    uint256 public constant MAX_AMOUNT = type(uint128).max;
     uint256 public constant MAX_DEPTH = 16;
     bytes32 public constant ESCALATION_TYPEHASH =
-        keccak256("Escalation(bytes32 account,address token,address payee,uint256 amount,uint64 nonce)");
+        keccak256("Escalation(bytes32 account,address token,address payee,uint256 amount,uint64 nonce,uint64 deadline)");
 
     // ---------------------------------------------------------------- storage
 
@@ -85,6 +94,7 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
 
     event Registered(bytes32 indexed id, address indexed owner, address indexed signer, bytes32 parent);
     event Deposited(bytes32 indexed id, address indexed token, uint256 amount, address from);
+    event Refunded(bytes32 indexed id, address indexed token, uint256 amount, address module);
     event Spent(bytes32 indexed id, address indexed token, address indexed payee, uint256 amount, bool escalated);
     event Delegated(bytes32 indexed parent, bytes32 indexed child, address token, uint256 fund);
     event Recalled(bytes32 indexed parent, bytes32 indexed child, address token, uint256 amount);
@@ -106,6 +116,7 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
     error DepthExceeded();
     error ModulesAlreadyLocked();
     error BadEscalation();
+    error BadPayee();
 
     constructor() EIP712("FoliantAgentAccounts", "1") {
         _deployer = msg.sender;
@@ -148,23 +159,29 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
     function deposit(bytes32 id, address token, uint256 amount) external nonReentrant {
         if (!_accounts[id].exists) revert NoAccount();
         if (amount == 0) revert ZeroAmount();
-        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-        balanceOf[id][token] += amount;
-        emit Deposited(id, token, amount, msg.sender);
+        uint256 received = _pull(token, msg.sender, amount);
+        balanceOf[id][token] += received;
+        emit Deposited(id, token, received, msg.sender);
     }
 
     // ----------------------------------------------------------------- spends
 
     /// @notice Pay `amount` of `token` to an address outside the tree. Signer only.
-    /// @param escalationSig empty, or the policy's escalation co-signer's EIP-712 signature over this spend.
-    function transfer(bytes32 id, address token, address payee, uint256 amount, bytes calldata escalationSig)
-        external
-        nonReentrant
-    {
+    /// @param escalationSig empty, or the policy's escalation co-signer's EIP-712 signature over this spend,
+    ///        the account's current escalation nonce and `escalationDeadline`.
+    function transfer(
+        bytes32 id,
+        address token,
+        address payee,
+        uint256 amount,
+        bytes calldata escalationSig,
+        uint64 escalationDeadline
+    ) external nonReentrant {
         Account storage a = _account(id);
         if (msg.sender != a.signer) revert Unauthorized();
+        _requirePayee(payee);
         _requireFunds(id, token, amount);
-        bool escalated = _checkEscalation(a, id, token, payee, amount, escalationSig);
+        bool escalated = _checkEscalation(a, id, token, payee, amount, escalationSig, escalationDeadline);
         _authorise(id, a, token, payee, amount, escalated);
         balanceOf[id][token] -= amount;
         IERC20(token).safeTransfer(payee, amount);
@@ -173,15 +190,23 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
     /// @notice Called by a locked module (channel or pool contract) to commit `amount` of the
     /// account's balance to `payee` on behalf of `caller`, who must be the account's signer.
     /// The value is moved to the module, which holds it in escrow.
-    function commit(bytes32 id, address caller, address token, address payee, uint256 amount, bytes calldata escalationSig)
-        external
-        nonReentrant
-    {
+    /// @dev Trust boundary (A1-7): the module asserts `caller`; modules are a locked set and must
+    /// authenticate the signer themselves.
+    function commit(
+        bytes32 id,
+        address caller,
+        address token,
+        address payee,
+        uint256 amount,
+        bytes calldata escalationSig,
+        uint64 escalationDeadline
+    ) external nonReentrant {
         if (!isModule[msg.sender]) revert Unauthorized();
         Account storage a = _account(id);
         if (caller != a.signer) revert Unauthorized();
+        _requirePayee(payee);
         _requireFunds(id, token, amount);
-        bool escalated = _checkEscalation(a, id, token, payee, amount, escalationSig);
+        bool escalated = _checkEscalation(a, id, token, payee, amount, escalationSig, escalationDeadline);
         _authorise(id, a, token, payee, amount, escalated);
         balanceOf[id][token] -= amount;
         IERC20(token).safeTransfer(msg.sender, amount);
@@ -191,8 +216,10 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
     function refund(bytes32 id, address token, uint256 amount) external nonReentrant {
         if (!isModule[msg.sender]) revert Unauthorized();
         if (!_accounts[id].exists) revert NoAccount();
-        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-        balanceOf[id][token] += amount;
+        if (amount == 0) revert ZeroAmount();
+        uint256 received = _pull(token, msg.sender, amount);
+        balanceOf[id][token] += received;
+        emit Refunded(id, token, received, msg.sender);
     }
 
     // ------------------------------------------------------------------- tree
@@ -282,12 +309,13 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
         p.escalation = s.escalation;
     }
 
-    /// @notice Value committed by `id` inside its current window (pruning is lazy; this is the true figure).
+    /// @notice Value committed by `id` inside its current window (bucketed; see the header note).
     function spentInWindow(bytes32 id) public view returns (uint256 total) {
         Account storage a = _account(id);
-        uint256 cutoff = block.timestamp > a.policy.windowSecs ? block.timestamp - a.policy.windowSecs : 0;
-        for (uint256 i = a.windowHead; i < a.window.length; i++) {
-            if (a.window[i].ts > cutoff) total += a.window[i].amount;
+        uint256 cutoff = _cutoff(a.policy.windowSecs);
+        for (uint256 i = 0; i < SLOTS; i++) {
+            Slot storage sl = a.window[i];
+            if (sl.ts > cutoff) total += sl.amount;
         }
     }
 
@@ -300,12 +328,19 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
         return false;
     }
 
-    function escalationDigest(bytes32 id, address token, address payee, uint256 amount, uint64 nonce)
+    function escalationDigest(bytes32 id, address token, address payee, uint256 amount, uint64 nonce, uint64 deadline)
         public
         view
         returns (bytes32)
     {
-        return _hashTypedDataV4(keccak256(abi.encode(ESCALATION_TYPEHASH, id, token, payee, amount, nonce)));
+        return _hashTypedDataV4(keccak256(abi.encode(ESCALATION_TYPEHASH, id, token, payee, amount, nonce, deadline)));
+    }
+
+    /// @notice Invalidate any outstanding escalation signature for `id`. Signer, owner or an ancestor's signer.
+    function revokeEscalation(bytes32 id) external {
+        Account storage a = _account(id);
+        if (msg.sender != a.signer && !_mayAdminister(a, msg.sender)) revert Unauthorized();
+        a.escalationNonce += 1;
     }
 
     // -------------------------------------------------------------- internals
@@ -317,8 +352,23 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
 
     function _requireFunds(bytes32 id, address token, uint256 amount) internal view {
         if (amount == 0) revert ZeroAmount();
-        if (amount > type(uint128).max) revert PolicyViolation("amount too large"); // window entries are uint128
+        if (amount > MAX_AMOUNT) revert PolicyViolation("amount too large"); // window slots are uint128
         if (balanceOf[id][token] < amount) revert InsufficientFunds();
+    }
+
+    function _requirePayee(address payee) internal view {
+        if (payee == address(0) || payee == address(this)) revert BadPayee();
+    }
+
+    /// @dev Pull `amount` of `token` from `from`; return what actually arrived (fee-on-transfer safe).
+    function _pull(address token, address from, uint256 amount) internal returns (uint256) {
+        uint256 before = IERC20(token).balanceOf(address(this));
+        IERC20(token).safeTransferFrom(from, address(this), amount);
+        return IERC20(token).balanceOf(address(this)) - before;
+    }
+
+    function _cutoff(uint32 windowSecs) internal view returns (uint256) {
+        return block.timestamp > windowSecs ? block.timestamp - windowSecs : 0;
     }
 
     function _depth(bytes32 id) internal view returns (uint256 d) {
@@ -336,20 +386,22 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
         return false;
     }
 
-    /// @dev Escalation lifts perTxMax for this account only. The co-signer signs the exact spend and
-    /// the account's current escalation nonce, which is consumed here whether or not the spend later passes
-    /// the window check; a failed spend reverts the whole call, so the nonce is consumed only on success.
+    /// @dev Escalation lifts perTxMax for this account only. The co-signer signs the exact spend, the
+    /// account's current escalation nonce and a deadline. The nonce advances here; because a failed spend
+    /// reverts the whole call, it is consumed only when the spend succeeds.
     function _checkEscalation(
         Account storage a,
         bytes32 id,
         address token,
         address payee,
         uint256 amount,
-        bytes calldata sig
+        bytes calldata sig,
+        uint64 deadline
     ) internal returns (bool) {
         if (sig.length == 0) return false;
         if (a.policy.escalation == address(0)) revert BadEscalation();
-        bytes32 digest = escalationDigest(id, token, payee, amount, a.escalationNonce);
+        if (block.timestamp > deadline) revert BadEscalation();
+        bytes32 digest = escalationDigest(id, token, payee, amount, a.escalationNonce, deadline);
         (address rec, ECDSA.RecoverError err,) = ECDSA.tryRecover(digest, sig);
         if (err != ECDSA.RecoverError.NoError || rec != a.policy.escalation) revert BadEscalation();
         a.escalationNonce += 1;
@@ -365,8 +417,7 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
         bytes32 cur = id;
         Account storage node = a;
         while (true) {
-            uint256 spent = _spentAndPrune(node);
-            _check(node.policy, payee, amount, spent, escalated && cur == id);
+            _check(node.policy, payee, amount, spentInWindowOf(node), escalated && cur == id);
             if (node.parent == bytes32(0)) break;
             cur = node.parent;
             node = _accounts[cur];
@@ -375,9 +426,7 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
         cur = id;
         node = a;
         while (true) {
-            // amount <= uint128 max: enforced in _requireFunds before any authorise
-            // forge-lint: disable-next-line(unsafe-typecast)
-            node.window.push(Entry(uint64(block.timestamp), uint128(amount)));
+            _record(node, amount);
             if (node.parent == bytes32(0)) break;
             cur = node.parent;
             node = _accounts[cur];
@@ -385,14 +434,29 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
         emit Spent(id, token, payee, amount, escalated);
     }
 
-    /// @dev Drops entries that have left the window (they can never count again), returns the current sum.
-    function _spentAndPrune(Account storage a) internal returns (uint256 total) {
-        uint256 cutoff = block.timestamp > a.policy.windowSecs ? block.timestamp - a.policy.windowSecs : 0;
-        uint256 i = a.windowHead;
-        uint256 n = a.window.length;
-        while (i < n && a.window[i].ts <= cutoff) i++;
-        a.windowHead = i;
-        for (; i < n; i++) total += a.window[i].amount;
+    function spentInWindowOf(Account storage a) internal view returns (uint256 total) {
+        uint256 cutoff = _cutoff(a.policy.windowSecs);
+        for (uint256 i = 0; i < SLOTS; i++) {
+            Slot storage sl = a.window[i];
+            if (sl.ts > cutoff) total += sl.amount;
+        }
+    }
+
+    /// @dev Add `amount` to the bucket for now. A live bucket (its first timestamp still inside the window)
+    /// keeps that earlier timestamp, so the sum can only over-count; a stale bucket is restarted.
+    function _record(Account storage a, uint256 amount) internal {
+        uint256 bucketLen = (uint256(a.policy.windowSecs) + SLOTS - 1) / SLOTS; // >= 1
+        // slither-disable-next-line weak-prng  (a bucket index, not randomness)
+        Slot storage sl = a.window[(block.timestamp / bucketLen) % SLOTS];
+        if (sl.ts > _cutoff(a.policy.windowSecs)) {
+            // amount <= MAX_AMOUNT (checked in _requireFunds); sum bounded by perWindowMax (uint128) after _check
+            // forge-lint: disable-next-line(unsafe-typecast)
+            sl.amount += uint128(amount);
+        } else {
+            sl.ts = uint64(block.timestamp);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            sl.amount = uint128(amount);
+        }
     }
 
     /// @dev Policy.check from the reference, same order and same conditions.
@@ -435,7 +499,7 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
         s.escalation = p.escalation;
         delete s.allowList;
         delete s.denyList;
-        for (uint256 i = 0; i < p.allowList.length; i++) s.allowList.push(p.allowList[i]);
+        if (p.hasAllowList) for (uint256 i = 0; i < p.allowList.length; i++) s.allowList.push(p.allowList[i]);
         for (uint256 i = 0; i < p.denyList.length; i++) s.denyList.push(p.denyList[i]);
     }
 

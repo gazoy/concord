@@ -47,7 +47,7 @@ contract Handler is Test {
         bytes32 id = _pick(seed);
         amount = uint128(bound(amount, 1, 2 * maxWindowCap));
         vm.prank(signerOf[id]);
-        try acc.transfer(id, address(usdc), payee, amount, "") {
+        try acc.transfer(id, address(usdc), payee, amount, "", 0) {
             left += amount;
         } catch {}
     }

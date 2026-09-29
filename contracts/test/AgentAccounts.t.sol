@@ -59,11 +59,11 @@ contract AgentAccountsTest is Test {
 
     function _spend(bytes32 id, address signer, uint256 amount) internal {
         vm.prank(signer);
-        acc.transfer(id, address(usdc), payee, amount, "");
+        acc.transfer(id, address(usdc), payee, amount, "", 0);
     }
 
     function _escSig(bytes32 id, uint256 amount) internal view returns (bytes memory) {
-        bytes32 digest = acc.escalationDigest(id, address(usdc), payee, amount, acc.escalationNonce(id));
+        bytes32 digest = acc.escalationDigest(id, address(usdc), payee, amount, acc.escalationNonce(id), type(uint64).max);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(escKey, digest);
         return abi.encodePacked(r, s, v);
     }
@@ -138,7 +138,7 @@ contract AgentAccountsTest is Test {
         _spend(root, rootSigner, 500);
         vm.prank(grandSigner);
         vm.expectRevert(abi.encodeWithSelector(AgentAccounts.PolicyViolation.selector, "amount would exceed per_window_max"));
-        acc.transfer(grand, address(usdc), payee, 200, "");
+        acc.transfer(grand, address(usdc), payee, 200, "", 0);
         // and nothing was recorded by the refused spend
         assertEq(acc.spentInWindow(grand), 400);
         assertEq(acc.spentInWindow(root), 900);
@@ -150,7 +150,7 @@ contract AgentAccountsTest is Test {
         acc.setPolicy(root, _policy(50, 1000, 3600));
         vm.prank(childSigner);
         vm.expectRevert(abi.encodeWithSelector(AgentAccounts.PolicyViolation.selector, "amount exceeds per_tx_max"));
-        acc.transfer(child, address(usdc), payee, 100, "");
+        acc.transfer(child, address(usdc), payee, 100, "", 0);
         _spend(child, childSigner, 50);
     }
 
@@ -182,7 +182,7 @@ contract AgentAccountsTest is Test {
         bytes32 child = _delegate(root, rootSigner, childSigner, _policy(500, 1000, 3600), 5000);
         vm.prank(owner);
         vm.expectRevert(AgentAccounts.Unauthorized.selector);
-        acc.transfer(root, address(usdc), payee, 1, "");
+        acc.transfer(root, address(usdc), payee, 1, "", 0);
         vm.prank(childSigner);
         vm.expectRevert(AgentAccounts.Unauthorized.selector);
         acc.delegate(root, other, _policy(1, 1, 1), 0, address(usdc), 0);
@@ -203,14 +203,14 @@ contract AgentAccountsTest is Test {
         // 300 > child per_tx_max 100, allowed with the co-signature; root's cap is 500 so it passes
         bytes memory sig300 = _escSig(child, 300);
         vm.prank(childSigner);
-        acc.transfer(child, address(usdc), payee, 300, sig300);
+        acc.transfer(child, address(usdc), payee, 300, sig300, type(uint64).max);
         assertEq(usdc.balanceOf(payee), 300);
         assertEq(acc.escalationNonce(child), 1);
         // 600 > root per_tx_max 500: the child's co-signer cannot lift an ancestor's cap
         bytes memory sig600 = _escSig(child, 600);
         vm.prank(childSigner);
         vm.expectRevert(abi.encodeWithSelector(AgentAccounts.PolicyViolation.selector, "amount exceeds per_tx_max"));
-        acc.transfer(child, address(usdc), payee, 600, sig600);
+        acc.transfer(child, address(usdc), payee, 600, sig600, type(uint64).max);
         assertEq(acc.escalationNonce(child), 1); // failed spend consumed nothing
     }
 
@@ -221,19 +221,19 @@ contract AgentAccountsTest is Test {
         bytes memory sig = _escSig(child, 300);
         vm.prank(childSigner);
         vm.expectRevert(AgentAccounts.BadEscalation.selector);
-        acc.transfer(child, address(usdc), payee, 301, sig); // different amount
+        acc.transfer(child, address(usdc), payee, 301, sig, type(uint64).max); // different amount
         vm.prank(childSigner);
         vm.expectRevert(AgentAccounts.BadEscalation.selector);
-        acc.transfer(child, address(usdc), other, 300, sig); // different payee
+        acc.transfer(child, address(usdc), other, 300, sig, type(uint64).max); // different payee
         vm.prank(childSigner);
-        acc.transfer(child, address(usdc), payee, 300, sig);
+        acc.transfer(child, address(usdc), payee, 300, sig, type(uint64).max);
         vm.prank(childSigner);
         vm.expectRevert(AgentAccounts.BadEscalation.selector);
-        acc.transfer(child, address(usdc), payee, 300, sig); // replay
+        acc.transfer(child, address(usdc), payee, 300, sig, type(uint64).max); // replay
         // no co-signer on the policy: any signature is refused
         vm.prank(rootSigner);
         vm.expectRevert(AgentAccounts.BadEscalation.selector);
-        acc.transfer(root, address(usdc), payee, 300, sig);
+        acc.transfer(root, address(usdc), payee, 300, sig, type(uint64).max);
     }
 
     function test_validation_precedes_recording() public {
@@ -241,7 +241,7 @@ contract AgentAccountsTest is Test {
         bytes32 child = _delegate(root, rootSigner, childSigner, _policy(500, 1000, 3600), 100);
         vm.prank(childSigner);
         vm.expectRevert(AgentAccounts.InsufficientFunds.selector);
-        acc.transfer(child, address(usdc), payee, 200, "");
+        acc.transfer(child, address(usdc), payee, 200, "", 0);
         assertEq(acc.spentInWindow(child), 0);
         assertEq(acc.spentInWindow(root), 0);
     }
@@ -249,7 +249,7 @@ contract AgentAccountsTest is Test {
     function test_zero_amounts_refused_and_no_money_created() public {
         vm.prank(rootSigner);
         vm.expectRevert(AgentAccounts.ZeroAmount.selector);
-        acc.transfer(root, address(usdc), payee, 0, "");
+        acc.transfer(root, address(usdc), payee, 0, "", 0);
         vm.expectRevert(AgentAccounts.ZeroAmount.selector);
         acc.deposit(root, address(usdc), 0);
         bytes32 child = _delegate(root, rootSigner, childSigner, _policy(500, 1000, 3600), 0);
@@ -266,7 +266,7 @@ contract AgentAccountsTest is Test {
         _spend(root, rootSigner, 500);
         vm.prank(rootSigner);
         vm.expectRevert(abi.encodeWithSelector(AgentAccounts.PolicyViolation.selector, "amount would exceed per_window_max"));
-        acc.transfer(root, address(usdc), payee, 1, "");
+        acc.transfer(root, address(usdc), payee, 1, "", 0);
         vm.warp(block.timestamp + 3600); // entries at t are counted while t > now - window; at exactly the edge they drop
         assertEq(acc.spentInWindow(root), 0);
         _spend(root, rootSigner, 500);
@@ -281,11 +281,11 @@ contract AgentAccountsTest is Test {
         _fund(r2, 1000);
         vm.prank(rootSigner);
         vm.expectRevert(abi.encodeWithSelector(AgentAccounts.PolicyViolation.selector, "payee is denied"));
-        acc.transfer(r2, address(usdc), other, 1, "");
+        acc.transfer(r2, address(usdc), other, 1, "", 0);
         vm.warp(block.timestamp + 10);
         vm.prank(rootSigner);
         vm.expectRevert(abi.encodeWithSelector(AgentAccounts.PolicyViolation.selector, "policy expired"));
-        acc.transfer(r2, address(usdc), payee, 1, "");
+        acc.transfer(r2, address(usdc), payee, 1, "", 0);
     }
 
     function test_child_expiry_bounded_by_parent() public {
@@ -315,13 +315,13 @@ contract AgentAccountsTest is Test {
         acc.lockModules(mods);
         vm.prank(payee);
         vm.expectRevert(AgentAccounts.Unauthorized.selector);
-        acc.commit(root, rootSigner, address(usdc), payee, 1, "");
+        acc.commit(root, rootSigner, address(usdc), payee, 1, "", 0);
         // a module may commit only on behalf of the signer, under the policy
         vm.prank(other);
         vm.expectRevert(AgentAccounts.Unauthorized.selector);
-        acc.commit(root, owner, address(usdc), payee, 1, "");
+        acc.commit(root, owner, address(usdc), payee, 1, "", 0);
         vm.prank(other);
-        acc.commit(root, rootSigner, address(usdc), payee, 400, "");
+        acc.commit(root, rootSigner, address(usdc), payee, 400, "", 0);
         assertEq(usdc.balanceOf(other), 400);
         assertEq(acc.spentInWindow(root), 400);
         // refund returns escrow without touching the window
@@ -353,7 +353,7 @@ contract AgentAccountsTest is Test {
             (bytes32 who, address s) = i % 2 == 0 ? (a, childSigner) : (b, grandSigner);
             vm.prank(s);
             (bool ok,) = address(acc).call(
-                abi.encodeWithSelector(acc.transfer.selector, who, address(usdc), payee, amt, bytes(""))
+                abi.encodeWithSelector(acc.transfer.selector, who, address(usdc), payee, amt, bytes(""), uint64(0))
             );
             if (ok) left += amt;
         }
