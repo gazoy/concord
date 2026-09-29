@@ -1,6 +1,6 @@
 # Cross-chain budget tree: simulation specification
 
-Version 1.1, 29 September 2026. Written before any simulation code. Changes after
+Version 1.2, 29 September 2026. Written before any simulation code. Changes after
 implementation begins are recorded in the change log at the end, with reasons.
 
 ## 1. Question
@@ -173,3 +173,12 @@ unedited.
 - 1.1: relay delivery runs both before and after each second's spends so that
   d = 0 means "seen within the same second"; the 1.0 code delivered only before,
   which made d = 0 behave as d = 1 and was caught by the §6 window invariant.
+- 1.2 (after the full sweep began): at d = 0 the 1.1 code still let a spend on
+  A and a spend on B in the same simulated second each pass unseen by the
+  other, producing overshoot of up to n × m at d = 0. That is sub-second
+  concurrency, not zero delay, and H2 already bounds it; but H1 is meant to be
+  the single-ledger sanity case, so d = 0 now delivers after every individual
+  spend and is truly synchronous. Sub-second concurrency is represented by
+  d = 1. The 1.1 behaviour is recorded here because it is itself a finding:
+  "zero relay delay" in a real deployment is never atomic, and the d = 1 cell
+  is the honest lower bound for a live system.

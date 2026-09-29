@@ -145,6 +145,7 @@ def run(P: Params) -> dict:
                         s.outbox.append(sp)
                         last_spend_t = t
                         applied_this_second += 1
+                        deliver()  # d = 0 is synchronous: the other ledger sees this spend at once
         if seen_before_spends >= P.C and applied_this_second:
             h4_violations += 1
         deliver()
