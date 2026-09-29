@@ -7,7 +7,13 @@
 <meta name="description" content="Foliant is an open protocol that gives an AI agent crew an on-chain budget its code cannot bypass, and settles thousands of x402 calls in one transaction, on the chains agents already use.">
 <meta property="og:title" content="Foliant — give agent crews a budget, not a hot wallet">
 <meta property="og:description" content="AI agents that buy tools, data and compute pay per call over x402, the open HTTP payment standard. Foliant settles a crew's session in one transaction and enforces the crew's budget on-chain, where the code running the agents cannot bypass it.">
-<meta property="og:image" content="https://foliant.network/assets/poster.jpg">
+<meta property="og:image" content="https://foliant.network/assets/brand/foliant-app-icon.png">
+<link rel="icon" type="image/svg+xml" href="assets/brand/foliant-favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/brand/foliant-icon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="assets/brand/foliant-icon-16.png">
+<link rel="icon" type="image/png" sizes="48x48" href="assets/brand/foliant-icon-48.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/brand/foliant-icon-180.png">
+<meta name="theme-color" content="#0F1B2D">
 <meta property="og:url" content="https://foliant.network/">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
@@ -25,7 +31,8 @@
   .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
   header{padding:28px 0}
   header .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
-  .brand{font-weight:700;letter-spacing:3px;font-size:15px;color:var(--accent-soft)}
+  .brand{display:inline-flex;align-items:center}
+  .brand img{height:34px;width:auto;display:block}
   nav a{margin-left:22px;color:var(--muted);font-size:15px}
   .hero{padding:56px 0 64px}
   .hero h1{font-size:clamp(34px,6vw,64px);line-height:1.05;font-weight:600;margin:0 0 20px;max-width:900px}
@@ -66,7 +73,7 @@
 <body>
 <header>
   <div class="wrap">
-    <div class="brand mono">FOLIANT</div>
+    <a class="brand" href="/" aria-label="Foliant"><img src="assets/brand/foliant-lockup-dark-transparent.svg" alt="Foliant" height="34"></a>
     <nav>
       <a href="#how">How it works</a>
       <a href="#proof">It runs today</a>
@@ -159,7 +166,7 @@
 
 <footer>
   <div class="wrap">
-    <div>Foliant · Machine Quotient Ltd, London · <a href="mailto:gaz@garethoyston.com">gaz@garethoyston.com</a></div>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><img src="assets/brand/foliant-lockup-dark-transparent.svg" alt="Foliant" style="height:22px;width:auto"><span>Machine Quotient Ltd, London · <a href="mailto:gaz@garethoyston.com">gaz@garethoyston.com</a></span></div>
     <div><a href="https://github.com/gazoy/concord">GitHub</a> · <a href="https://github.com/gazoy/concord/blob/main/docs/whitepaper.md">Whitepaper</a> · <a href="https://github.com/gazoy/concord/blob/main/LICENSE">Apache-2.0</a></div>
   </div>
 </footer>

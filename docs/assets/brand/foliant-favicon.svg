@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Foliant emblem">
+<rect width="64" height="64" rx="12" fill="#0B1220"/>
+<path d="M8 50 L32 38 L56 50 L32 62 Z" fill="#7DA6F2" fill-opacity="0.4" stroke="#7DA6F2" stroke-width="1.5" stroke-linejoin="round" transform="translate(7.040,7.040) scale(0.78000)"/>
+<path d="M8 33 L32 21 L56 33 L32 45 Z" fill="#7DA6F2" fill-opacity="0.7" stroke="#7DA6F2" stroke-width="1.5" stroke-linejoin="round" transform="translate(7.040,7.040) scale(0.78000)"/>
+<path d="M8 16 L32 4 L56 16 L32 28 Z" fill="#7DA6F2" fill-opacity="1.0" stroke="#7DA6F2" stroke-width="1.5" stroke-linejoin="round" transform="translate(7.040,7.040) scale(0.78000)"/>
+</svg>
