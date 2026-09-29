@@ -9,13 +9,12 @@
 4. Cross-company    two firms' agents trade through a channel with bounded exposure;
                     the counterparty goes silent; the payer recovers alone.
 5. Delegated money  a funder delegates to a department, which delegates to a
-                    project; allow-list, expiry and receipts bound every level.
+                    project: one policy tree, every spend counted up it, tightened
+                    from above, recalled from above.
 6. Device fleet     an EV pays a charger by the second through a stream; the
                     charger claims what has accrued; the owner's cap holds.
 
-Nothing here is new library code: every scenario uses foliant/ as it stands.
-Where the library lacks something the whitepaper describes (a policy tree
-enforced as one object rather than delegation by funding), the scenario says so.
+Every scenario uses foliant/ as it stands.
 """
 from __future__ import annotations
 
@@ -174,41 +173,47 @@ def scenario_4_cross_company(L: Ledger) -> None:
 
 
 def scenario_5_delegated_money(L: Ledger) -> None:
-    print("\n5. delegated money: funder -> department -> project, bounded at every level")
+    print("\n5. delegated money: funder -> department -> project, one policy tree")
     vendors = {KeyPair.from_seed(b"approved-cloud").address, KeyPair.from_seed(b"approved-data").address}
-    dept = agent(L, "department", Policy(per_tx_max=2_000, per_window_max=2_000, window_secs=90 * 24 * HOUR,
-                                         allow_list=frozenset(vendors), expiry=L.now + 90 * 24 * HOUR), funds=0)
-    project = agent(L, "project", Policy(per_tx_max=200, per_window_max=500, window_secs=30 * 24 * HOUR,
-                                         allow_list=frozenset(vendors), expiry=L.now + 30 * 24 * HOUR), funds=0)
-    funder = agent(L, "funder", Policy(per_tx_max=5_000, per_window_max=5_000, window_secs=365 * 24 * HOUR,
-                                       allow_list=frozenset({dept.account.address})), funds=20_000)
-    funder.transfer(dept.account.address, ASSET, 2_000)
-    dept_owner = KeyPair.from_seed(b"department-owner")
-    # the department's allow-list is vendors only; its owner widens it to fund the project
-    widened = Policy(per_tx_max=2_000, per_window_max=2_000, window_secs=90 * 24 * HOUR,
-                     allow_list=frozenset(vendors | {project.account.address}), expiry=L.now + 90 * 24 * HOUR)
-    L.apply(sign(dept_owner, {"account": dept.account.id, "nonce": dept.account.nonce, "op": "set_policy", "policy": widened.to_dict()}))
-    dept.signer.policy = widened
-    dept.transfer(project.account.address, ASSET, 500)
-    line(f"funder -> department 2,000 -> project 500; each hop passed the sender's policy and its allow-list")
+    day = 24 * HOUR
+    funder = agent(L, "funder", Policy(per_tx_max=2_000, per_window_max=5_000, window_secs=365 * day,
+                                       allow_list=frozenset(vendors), expiry=L.now + 365 * day), funds=20_000)
+    dept = funder.delegate(KeyPair.from_seed(b"dept-signer"),
+                           Policy(per_tx_max=2_000, per_window_max=2_000, window_secs=90 * day,
+                                  allow_list=frozenset(vendors), expiry=L.now + 90 * day), fund=2_000, asset=ASSET)
+    project = dept.delegate(KeyPair.from_seed(b"project-signer"),
+                            Policy(per_tx_max=200, per_window_max=500, window_secs=30 * day,
+                                   allow_list=frozenset(vendors), expiry=L.now + 30 * day), fund=500, asset=ASSET)
+    line("funder delegates 2,000 to a department, which delegates 500 to a project; funding is not a spend")
+    line(f"windows after delegation: funder {funder.account.window.spent(L.now, 365 * day)}, dept {dept.account.window.spent(L.now, 90 * day)}")
+    try:
+        dept.delegate(KeyPair.from_seed(b"rogue"), Policy(per_tx_max=5_000, per_window_max=5_000, window_secs=day), fund=1, asset=ASSET, salt=9)
+    except PolicyViolation as e:
+        line(f"a department cannot create a child wider than itself: {e}")
     cloud = next(iter(vendors))
     project.transfer(cloud, ASSET, 150)
-    line("project pays an approved vendor 150: applied")
+    line(f"project pays an approved vendor 150: applied; counted at project {project.account.window.spent(L.now, 30 * day)}, "
+         f"dept {dept.account.window.spent(L.now, 90 * day)}, funder {funder.account.window.spent(L.now, 365 * day)}")
+    for label, fn in (("an unapproved vendor", lambda: project.transfer(KeyPair.from_seed(b"conference-hotel").address, ASSET, 100)),
+                      ("its own cap", lambda: project.transfer(cloud, ASSET, 400))):
+        try:
+            fn()
+        except PolicyViolation as e:
+            line(f"project against {label}: {e}")
+    # the department is tightened from above, mid-project: the project is bound at once
+    funder.set_child_policy(dept, Policy(per_tx_max=2_000, per_window_max=160, window_secs=90 * day,
+                                         allow_list=frozenset(vendors), expiry=L.now + 90 * day))
     try:
-        project.transfer(KeyPair.from_seed(b"conference-hotel").address, ASSET, 100)
+        project.transfer(cloud, ASSET, 20)
     except PolicyViolation as e:
-        line(f"project pays an unapproved vendor: {e}")
+        line(f"funder tightens the department to 160; the project's next 20 is refused by the tree: {e}")
+    L.advance(31 * day)
     try:
-        project.transfer(cloud, ASSET, 400)
-    except PolicyViolation as e:
-        line(f"project exceeds its cap: {e}")
-    L.advance(31 * 24 * HOUR)
-    try:
-        project.transfer(cloud, ASSET, 10)
+        project.transfer(cloud, ASSET, 5)
     except PolicyViolation as e:
         line(f"after the project's expiry: {e}")
-    line(f"unspent at the project: {L.balance(project.account.address, ASSET)}; returned by the owner, receipts on-chain for every hop")
-    line("note: this is delegation by funding, each account with its own policy; a single policy tree enforced as one object is whitepaper work not yet in the library")
+    got = funder.recall(project, ASSET)["recalled"]
+    line(f"funder recalls the project's unspent {got} directly, two levels down; receipts on-chain for every hop")
 
 
 def scenario_6_device_fleet(L: Ledger) -> None:

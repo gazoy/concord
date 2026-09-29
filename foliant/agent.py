@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .accounts import AgentSigner, Attestation, Policy
+from .accounts import AgentAccount, AgentSigner, Attestation, Policy
 from .crypto import KeyPair, Signed, sign
 from .ledger import Ledger
 
@@ -42,6 +42,35 @@ class Agent:
             env = self.signer.sign_plain(body)
         esc = sign(escalate_with, env.body) if escalate_with else None
         return self.ledger.apply(env, esc)
+
+    # --- the tree -----------------------------------------------------------
+
+    def delegate(self, signer_kp: KeyPair, policy: Policy, *, fund: int = 0, asset: str = "", salt: int = 0) -> "Agent":
+        """Create a child account operated by `signer_kp` under `policy` (which must sit
+        within this account's), fund it, and return an Agent for it."""
+        res = self.submit("delegate", signer=signer_kp.public.to_dict(), policy=policy.to_dict(),
+                          fund=fund, asset=asset, salt=salt)
+        child = self.ledger.accounts[res["account_id"]]
+        return Agent.attach(self.ledger, child, signer_kp, owner=self.owner)
+
+    def recall(self, child: "Agent", asset: str, amount: Optional[int] = None) -> dict:
+        return self.submit("recall", child=child.account.id, asset=asset, amount=amount)
+
+    def set_child_policy(self, child: "Agent", policy: Policy) -> dict:
+        """An ancestor's signer sets a descendant's policy; the child's signer must be told."""
+        body = {"account": child.account.id, "nonce": child.account.nonce, "op": "set_policy", "policy": policy.to_dict()}
+        res = self.ledger.apply(self.signer.sign_plain(body))
+        child.signer.policy = policy
+        return res
+
+    @classmethod
+    def attach(cls, ledger: Ledger, account: AgentAccount, signer_kp: KeyPair, *, owner: KeyPair) -> "Agent":
+        """An Agent object for an account that already exists on the ledger."""
+        self = cls.__new__(cls)
+        self.ledger, self.owner, self.account = ledger, owner, account
+        self.signer = AgentSigner(signer_kp, account.policy, account.id)
+        self._channel_seq, self._pool_seq, self.latest = {}, {}, {}
+        return self
 
     def transfer(self, to: str, asset: str, amount: int, **kw) -> dict:
         return self.submit("transfer", spend=amount, payee_addr=to, to=to, asset=asset, amount=amount, **kw)

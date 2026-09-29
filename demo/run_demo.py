@@ -4,6 +4,8 @@ Scenario A: one agent, one channel, 20 calls, one settlement.
 Scenario B: three agents share the provider's pool, 10 calls each, one settlement.
 Scenario C: policy enforcement — the enclave refuses to sign past per_window_max.
 Scenario D: unilateral exit from the pool after the coordinator goes silent.
+Scenario E: a crew: an orchestrator delegates sub-budgets to workers; the tree
+            bounds the whole crew, and the orchestrator revokes a worker itself.
 
 Runs in-process (httpx ASGI transport); no network, no chain daemon.
 """
@@ -95,8 +97,33 @@ def main() -> None:
     bob.finalize_exit(pool.id)
     line(f"bob refunded {L.balance(bob.account.address, ASSET) - bal_before}; exited={claim.exited}")
 
-    print(f"\nsupply check: {L.total_supply(ASSET)} == minted {1_000 + 10_000 * 5}")
-    assert L.total_supply(ASSET) == 1_000 + 10_000 * 5
+    print("\nE. a crew: orchestrator delegates budgets to three workers; the tree bounds the crew")
+    crew_cap = 150
+    orch = make_agent("orchestrator")
+    orch.signer.policy = orch.account.policy = Policy(per_tx_max=500, per_window_max=crew_cap, window_secs=3600)
+    workers = [orch.delegate(KeyPair.from_seed(f"worker-{i}".encode()),
+                             Policy(per_tx_max=100, per_window_max=100, window_secs=3600), fund=1_000, asset=ASSET, salt=i)
+               for i in range(3)]
+    wclients = [AgentHttpClient(w, http, default_deposit=50, prefer_pool=False) for w in workers]
+    calls = 0
+    try:
+        for i in range(100):
+            for wc in wclients:
+                wc.post("/infer", content=f"task {i}")
+                calls += 1
+    except PolicyViolation as e:
+        line(f"each worker may commit 100; the crew as a whole may commit {crew_cap}. after {calls} calls: {e}")
+    line(f"committed: workers {[w.account.window.spent(L.now, 3600) for w in workers]}, orchestrator {orch.account.window.spent(L.now, 3600)} = crew total")
+    orch.set_child_policy(workers[2], Policy(per_tx_max=0, per_window_max=0, window_secs=3600, expiry=L.now))
+    try:
+        wclients[2].post("/infer", content="x")
+    except PolicyViolation as e:
+        line(f"orchestrator revokes worker 3 with its own signer, no human in the loop: {e}")
+    got = orch.recall(workers[2], ASSET)["recalled"]
+    line(f"and recalls its unspent {got}; provider settles every open channel, the crew included, in one call: +{gate.settle()}")
+
+    print(f"\nsupply check: {L.total_supply(ASSET)} == minted {1_000 + 10_000 * 6}")
+    assert L.total_supply(ASSET) == 1_000 + 10_000 * 6
 
 
 if __name__ == "__main__":

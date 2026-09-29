@@ -5,6 +5,14 @@ checked by the ledger (on-chain) for every value-moving transaction, and by
 the AgentSigner (the enclave side) for every off-chain channel or pool update.
 Both sides run the same `Policy.check`, so a signer that refuses to sign and a
 ledger that refuses to apply agree exactly.
+
+Accounts form a tree (whitepaper §6.2, hierarchical budgets). An account's
+signer may `delegate`: create a child account with its own signer and a policy
+that sits within the parent's (`Policy.within`). Value leaving the tree is
+checked against, and recorded in, every ancestor's policy and window, so no
+branch can ever commit more than any ancestor allows, whatever its own policy
+says. Moves inside the tree (delegating funds down, recalling them up) are not
+spends.
 """
 from __future__ import annotations
 
@@ -78,6 +86,24 @@ class Policy:
                 f"(already spent {spent_in_window})"
             )
 
+    def within(self, parent: "Policy") -> None:
+        """Raise PolicyViolation unless this policy is no wider than `parent` on every axis.
+
+        Runtime enforcement up the tree makes this a guarantee at delegation time
+        rather than the only line of defence: a child that somehow held a wider
+        policy would still be bounded by its ancestors at every spend.
+        """
+        if self.per_tx_max > parent.per_tx_max:
+            raise PolicyViolation(f"child per_tx_max {self.per_tx_max} exceeds parent {parent.per_tx_max}")
+        if self.per_window_max > parent.per_window_max:
+            raise PolicyViolation(f"child per_window_max {self.per_window_max} exceeds parent {parent.per_window_max}")
+        if parent.allow_list is not None and (self.allow_list is None or not self.allow_list <= parent.allow_list):
+            raise PolicyViolation("child allow list must be a subset of the parent's")
+        if not parent.deny_list <= self.deny_list:
+            raise PolicyViolation("child deny list must include the parent's")
+        if parent.expiry is not None and (self.expiry is None or self.expiry > parent.expiry):
+            raise PolicyViolation("child expiry must not be later than the parent's")
+
 
 @dataclass(frozen=True)
 class Attestation:
@@ -129,10 +155,15 @@ class AgentAccount:
     attestation: Optional[Attestation] = None
     nonce: int = 0
     window: SpendWindow = field(default_factory=SpendWindow)
+    parent: Optional[str] = None  # account id this one was delegated from; None = root
 
     @staticmethod
     def make_id(owner: PublicKey, signer: PublicKey, nonce_salt: int) -> str:
         return hash_obj({"owner": owner.to_dict(), "signer": signer.to_dict(), "salt": nonce_salt})
+
+    @staticmethod
+    def make_child_id(parent_id: str, signer: PublicKey, nonce_salt: int) -> str:
+        return hash_obj({"parent": parent_id, "signer": signer.to_dict(), "salt": nonce_salt})
 
     @property
     def address(self) -> str:

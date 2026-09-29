@@ -99,6 +99,47 @@ class Ledger:
             raise NotFound(f"no account {acct_id}")
         return a
 
+    # --- the tree -----------------------------------------------------------
+
+    def lineage(self, acct: AgentAccount) -> list[AgentAccount]:
+        """The account, its parent, its grandparent, ... up to the root."""
+        chain = [acct]
+        while chain[-1].parent is not None:
+            chain.append(self._account(chain[-1].parent))
+        return chain
+
+    def is_descendant(self, acct_id: str, ancestor_id: str) -> bool:
+        a = self._account(acct_id)
+        while a.parent is not None:
+            if a.parent == ancestor_id:
+                return True
+            a = self._account(a.parent)
+        return False
+
+    def _tree_addresses(self, acct: AgentAccount) -> set[str]:
+        root = self.lineage(acct)[-1]
+        return {a.address for a in self.accounts.values()
+                if a.id == root.id or self.is_descendant(a.id, root.id)}
+
+    def _authorise(self, acct: AgentAccount, *, amount: int, payee: str, escalated: bool) -> None:
+        """Value leaving the tree: every ancestor's policy must allow it, then every
+        ancestor's window records it. All-or-nothing. Moves inside the tree are
+        not spends and are not checked."""
+        if payee in self._tree_addresses(acct):
+            return
+        chain = self.lineage(acct)
+        for a in chain:
+            spent = a.window.spent(self.now, a.policy.window_secs)
+            a.policy.check(amount=amount, payee=payee, now=self.now, spent_in_window=spent, escalated=escalated)
+        for a in chain:
+            a.window.record(self.now, amount)
+
+    def _may_administer(self, acct: AgentAccount, key: PublicKey) -> bool:
+        """The owner, or the signer of any ancestor, may set policy, rotate the signer or recall."""
+        if key == acct.owner:
+            return True
+        return any(key == a.signer for a in self.lineage(acct)[1:])
+
     def apply(self, env: Signed, escalation: Optional[Signed] = None) -> dict:
         """Apply an account-signed envelope. Returns a small result dict."""
         if not env.valid():
@@ -107,9 +148,11 @@ class Ledger:
         acct = self._account(b["account"])
         op = b["op"]
         owner_ops = {"rotate_signer", "set_policy"}
-        expected = acct.owner if op in owner_ops else acct.signer
-        if env.signer != expected:
-            raise Unauthorized(f"{op} must be signed by the account {'owner' if op in owner_ops else 'signer'}")
+        if op in owner_ops:
+            if not self._may_administer(acct, env.signer):
+                raise Unauthorized(f"{op} must be signed by the account owner or an ancestor's signer")
+        elif env.signer != acct.signer:
+            raise Unauthorized(f"{op} must be signed by the account signer")
         if b.get("nonce") != acct.nonce:
             raise InvalidUpdate(f"nonce {b.get('nonce')} != expected {acct.nonce}")
         escalated = False
@@ -129,14 +172,14 @@ class Ledger:
     # value-moving ops: policy check via acct.authorise before any transfer
 
     def _op_transfer(self, acct: AgentAccount, b: dict, escalated: bool) -> dict:
-        acct.authorise(amount=b["amount"], payee=b["to"], now=self.now, escalated=escalated)
+        self._authorise(acct, amount=b["amount"], payee=b["to"], escalated=escalated)
         self._move(Transfer(acct.address, b["to"], b["asset"], b["amount"]))
         return {"ok": True}
 
     def _op_open_channel(self, acct: AgentAccount, b: dict, escalated: bool) -> dict:
         # the deposit is committed spend: the policy sees it at open, and the
         # signer sees each off-chain update; both bound the same money
-        acct.authorise(amount=b["deposit"], payee=b["payee"], now=self.now, escalated=escalated)
+        self._authorise(acct, amount=b["deposit"], payee=b["payee"], escalated=escalated)
         cid = Channel.make_id(acct.id, b["payee"], b["salt"])
         if cid in self.channels:
             raise InvalidUpdate("channel exists")
@@ -162,7 +205,7 @@ class Ledger:
 
     def _op_join_pool(self, acct: AgentAccount, b: dict, escalated: bool) -> dict:
         pool = self._pool(b["pool_id"])
-        acct.authorise(amount=b["deposit"], payee=pool.coordinator, now=self.now, escalated=escalated)
+        self._authorise(acct, amount=b["deposit"], payee=pool.coordinator, escalated=escalated)
         pool.join(acct.id, b["deposit"])
         self._move(Transfer(acct.address, pool.escrow, pool.asset, b["deposit"]))
         return {"ok": True}
@@ -184,8 +227,38 @@ class Ledger:
         return {"ok": True}
 
     def _op_set_policy(self, acct: AgentAccount, b: dict, _: bool) -> dict:
-        acct.policy = Policy.from_dict(b["policy"])
+        policy = Policy.from_dict(b["policy"])
+        if acct.parent is not None:
+            policy.within(self._account(acct.parent).policy)
+        acct.policy = policy
         return {"ok": True}
+
+    # --- delegation (signer ops on the parent) ------------------------------
+
+    def _op_delegate(self, acct: AgentAccount, b: dict, _: bool) -> dict:
+        """Create a child account under this one, with a policy within this one's,
+        and move `fund` of `asset` to it. Funding a child is not a spend."""
+        signer = PublicKey.from_dict(b["signer"])
+        policy = Policy.from_dict(b["policy"])
+        policy.within(acct.policy)
+        cid = AgentAccount.make_child_id(acct.id, signer, b.get("salt", 0))
+        if cid in self.accounts:
+            raise InvalidUpdate("child account exists")
+        child = AgentAccount(cid, acct.owner, signer, policy, None, parent=acct.id)
+        self.accounts[cid] = child
+        if b.get("fund"):
+            self._move(Transfer(acct.address, child.address, b["asset"], b["fund"]))
+        return {"account_id": cid}
+
+    def _op_recall(self, acct: AgentAccount, b: dict, _: bool) -> dict:
+        """Pull a descendant's free balance back up to this account. Not a spend."""
+        child = self._account(b["child"])
+        if not self.is_descendant(child.id, acct.id):
+            raise Unauthorized("recall target is not a descendant")
+        amount = b["amount"] if b.get("amount") is not None else self.balance(child.address, b["asset"])
+        if amount:
+            self._move(Transfer(child.address, acct.address, b["asset"], amount))
+        return {"recalled": amount}
 
     # --- payee / coordinator side (plain keys) ----------------------------
 
