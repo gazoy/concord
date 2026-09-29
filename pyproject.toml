@@ -3,11 +3,11 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "foliant"
+name = "foliant-protocol"
 version = "0.1.0"
 description = "Foliant reference implementation: agent accounts with hierarchical spending policies, payment channels, pooled settlement and HTTP 402 metering in the x402 wire format"
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = ["cryptography>=42", "fastapi>=0.110", "httpx>=0.27"]
 
