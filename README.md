@@ -43,7 +43,8 @@ pip install -r requirements.txt
 python demo/run_demo.py     # five scenarios: channel, pool, policy, exit, crew; ~1 s
 python demo/run_uses.py     # six further uses: containment, insurable agent, abuse control,
                             # cross-company trade, delegated money, device fleet
-pytest                      # 29 tests incl. property-based invariants
+pytest                      # 34 tests incl. property-based invariants
+python sim/crosschain.py --quick   # cross-ledger budget-tree simulation, smoke run
 ```
 
 ## Layout
@@ -60,6 +61,7 @@ pytest                      # 29 tests incl. property-based invariants
 | `foliant/x402.py` | §6.5, §6.9 | `PaymentGate` (provider middleware, FastAPI) and `AgentHttpClient` (pays on 402) |
 | `demo/` | | A metered API, the four-scenario demo and six further use-case scenarios |
 | `tests/` | §10 | Invariants: conservation, bounds, replay, stale/forged updates, unilateral exit, policy windows, the budget tree |
+| `sim/` | §12 open problems | Cross-ledger budget tree study: specification, simulation, results, two independent audits |
 
 ## The rule that matters
 
