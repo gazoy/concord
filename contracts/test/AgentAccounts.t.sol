@@ -267,7 +267,7 @@ contract AgentAccountsTest is Test {
         vm.prank(rootSigner);
         vm.expectRevert(abi.encodeWithSelector(AgentAccounts.PolicyViolation.selector, "amount would exceed per_window_max"));
         acc.transfer(root, address(usdc), payee, 1, "", 0);
-        vm.warp(block.timestamp + 3600); // entries at t are counted while t > now - window; at exactly the edge they drop
+        vm.warp(block.timestamp + 3600 + 117); // reference drops at t + W; bucketed drops within bucketLen (117 s) of that
         assertEq(acc.spentInWindow(root), 0);
         _spend(root, rootSigner, 500);
     }

@@ -276,3 +276,143 @@ found allows theft or privilege escalation.
 | A1-8 Info | Allow list stored only when `hasAllowList`; contradictory comment removed. `perWindowMax < perTxMax` and duplicate entries remain accepted (as in the reference). |
 
 Reproduction tests in `test/Audit1.t.sol` were updated to assert the fixed behaviour (marked `FIXED`). Slither after the fix: `weak-prng` on the bucket index (false positive, annotated), `unused-return` on `tryRecover` (error value is checked), `timestamp` (inherent). Verification of the fixes by the auditor follows in section 6.
+
+## 6. Verification (auditor, 29 Sep 2026, commit 5ea849d)
+
+Method: re-read the contract in full; attacked the new `Slot[32]` window by hand (slot mapping,
+liveness rule, ring coverage, policy changes, uint128 sums), the escalation deadline/revoke path
+and the delta accounting; appended 9 tests to `test/Audit1.t.sol` (`test_V_*` verify, `test_A1_9*`
+and `test_A1_10` reproduce new findings). `forge test`: 46 of 49 pass; the 3 failures are the new
+reproductions and are kept, marked `// FINDING A1-9` / `// FINDING A1-10`.
+
+### 6.1 Status of round-1 findings
+
+| Finding | Status | Evidence |
+| --- | --- | --- |
+| A1-1 High, unbounded window | **Partially closed** | Gas is now constant: a sibling spend costs 187k gas on a fresh tree and 207k after 500 dust spends by a child (the 20k difference is a non-zero slot write, not a walk); a child's own spend after 500 own spends costs 187k (`test_V_A1_1_spend_gas_independent_of_prior_spends`). The DoS is gone. But the bucketed window that replaced the array under-counts (A1-9, A1-10 below), so the fix trades a liveness bug for a safety bug. |
+| A1-2 Medium, delta accounting | **Closed** | `deposit`, `commit`→`refund` round-trip on a 1%-fee token credits exactly what arrived at each hop (990 → 981 → 972) and `Refunded` carries the received amount (`test_V_A1_2_delta_accounting`). Rebasing tokens remain unsupported, as documented. A reentrant donation during `_pull` can only raise the delta with the donor's own tokens; `nonReentrant` blocks a nested `deposit`. |
+| A1-3 Low, self/zero payee | **Closed** | `BadPayee` on both `transfer` and `commit` for `address(0)` and `address(this)` (`test_V_A1_3_bad_payees`). |
+| A1-4 Low, escalation lifetime | **Closed** (one note, A1-11) | `deadline` is in the typed data (a signature over `d` fails when called with `d+1`), `block.timestamp > deadline` reverts so `deadline == 0` means "already expired" (safe default, should be documented), the boundary `block.timestamp == deadline` is accepted. `revokeEscalation` works for signer, owner and any ancestor's signer, is refused to strangers and to non-lineage signers, and a re-signed message under the new nonce works (`test_V_A1_4_deadline_and_revoke`). |
+| A1-5 Low, refund event | **Closed** | `Refunded(id, token, received, module)` emitted; `refund(…, 0)` reverts `ZeroAmount`. |
+| A1-6 Info, destructive pruning | **Closed, superseded** | Buckets persist, so lengthening a window resurrects earlier spend (over-count, conservative; `test_A1_6_*` now sees 2000). The replacement mechanism has its own, worse, policy-change problem: A1-9b. |
+| A1-7 Info, module trust | **Closed (accepted)** | Documented on `commit`. Nothing more to verify here; the module audits must cover signer authentication. |
+| A1-8 Info | **Closed** | `allowList` no longer stored when `hasAllowList` is false (`policyOf(...).allowList.length == 0`); contradictory comment removed. `perWindowMax < perTxMax` and duplicates still accepted, as stated. |
+
+### 6.2 New findings
+
+#### A1-9 High: the 32-slot ring does not cover `windowSecs`, so a new spend can be merged under a stale timestamp and forgotten after seconds
+
+Lines: 447-460 (`_record`), 437-443 (`spentInWindowOf`), 26-30 (header claim).
+
+`bucketLen = ceil(W / 32)` and the slot is `(now / bucketLen) % 32`. The slot for the current
+bucket B was last used by bucket B-32, whose latest timestamp is `(B-31)*bucketLen - 1`, i.e. at
+least `31*bucketLen + 1` seconds ago. That is less than `W` whenever `31*ceil(W/32) < W`, which
+holds for W = 3600 (3503 < 3600), 86400 (83700 < 86400), 63, 64, and most W above about 1000.
+The old slot is then still live (`sl.ts > cutoff`), so line 454 adds the new amount to it and
+keeps the OLD `ts`. The new amount is dropped when the old `ts` leaves the window, which is
+`W - (now - old ts)` seconds later: 96 seconds on an hour window.
+
+The header says bucketing "can only over-count". It is the reverse: this path and A1-10 only
+under-count; the only over-count is resurrection after a window is lengthened.
+
+Failure sequence (`test_A1_9_ring_wrap_merges_new_spend_under_old_timestamp`, W = 3600, cap
+1000): signer spends 1 at t1 = last second of a bucket; at t2 = t1 + 3504 (first second of the
+same slot's next cycle) spends 999 (allowed, window holds 1); at t3 = t1 + 3600, 96 seconds
+after t2, `spentInWindow` is 0 and a further 1000 is accepted. 1999 left in 96 seconds against a
+cap of 1000 per hour. Every ancestor with such a W is affected identically, so a delegated signer
+can do this against the root's cap: tree invariant 1 is broken. The signer needs only to pick
+timestamps, which it fully controls.
+
+Variant A1-9b (`test_A1_9b_lengthening_window_lets_signer_double_spend_cap`): the same merge
+happens when an administrator lengthens `windowSecs` (a tightening). The slot index remaps, a
+new spend can land on a slot that is live under the old mapping, and is merged under that slot's
+old `ts`. Owner changes W from 3200 to 6400; signer spends 1, then 999 at +1600 s, then 1000 at
++6400 s from the first spend, 4800 s after the 999 that the doubled window should still hold.
+
+Recommended fix (also fixes A1-10 and A1-9b): make liveness conservative and the ring wide enough.
+
+1. Store the bucket's nominal END, not the first timestamp: `end = bucketStart + bucketLen - 1`.
+   A slot is live iff `end > cutoff`. Everything in the bucket is at or before `end`, so nothing
+   is ever dropped before it is `W` old (over-count of at most one bucket, which is the
+   conservative direction).
+2. Merge with `sl.end = max(sl.end, curEnd)`; that keeps every merged amount alive at least as
+   long as the newest one, which makes policy changes (any remapping) safe without clearing.
+3. `bucketLen = ceil(W / (SLOTS - 1))`, so `31 * bucketLen >= W` and the slot being reused is
+   always stale: `(B-31)*bucketLen - 1 <= now - W` for all `now >= B*bucketLen`.
+4. Add a fuzz/invariant test that, for random W, random spend times and random policy changes,
+   the sum of spends in ANY trailing `W` seconds never exceeds `perWindowMax` (compare against a
+   reference list kept in the test). The existing invariant suite did not catch A1-9 because it
+   never times spends against bucket edges; the reference comparison would.
+
+#### A1-10 Medium: spends later in a bucket expire with the bucket's first spend
+
+Lines: 445-446 (comment), 451-454.
+
+A live slot keeps its first `ts`; amounts recorded up to `bucketLen - 1` seconds later are
+dropped when that first `ts` leaves the window, i.e. up to `bucketLen - 1` seconds early (112 s
+on an hour window, 45 minutes on a day window). Same exploit shape as A1-9 with a smaller gain:
+spend 1 at the start of a bucket, `cap - 1` at its end, `cap` again at `first + W`; `2*cap - 1`
+leaves in `W - bucketLen + 1` seconds (`test_A1_10_same_bucket_spends_expire_with_the_first`).
+Medium because the excess rate is bounded by about 1/32 of the window per cycle, but it is still
+a cap violation and it contradicts the documented "only over-count" guarantee. Fixed by item 1 of
+the A1-9 recommendation.
+
+#### A1-11 Informational: the co-signer cannot revoke its own approval, and revocation is silent
+
+Lines: 339-344.
+
+`revokeEscalation` is open to the signer, owner and ancestors' signers, but not to
+`policy.escalation`, the party whose approval is being withdrawn (the round-1 recommendation
+named the co-signer). With deadlines this is minor. `revokeEscalation` also emits no event, so
+an indexer cannot tell a revocation from an escalated spend when the nonce moves. Suggest
+allowing `msg.sender == a.policy.escalation` and emitting `EscalationRevoked(id, by, nonce)`.
+Also document that `deadline == 0` means "expired" rather than "none".
+
+### 6.3 Checked in this round and found correct
+
+- Window gas: constant per account (32 cold slot reads, about 67k gas per lineage level); no
+  per-spend storage growth; `windowHead`/array gone.
+- uint128 slot sums cannot overflow: a live slot's amount is included in `spent`, `_check`
+  enforces `spent + amount <= perWindowMax <= uint128.max` before `_record`, and a restarted slot
+  holds `amount <= MAX_AMOUNT`. Verified at `perWindowMax = perTxMax = uint128.max`: one spend of
+  `uint128.max` succeeds and the next 1-unit spend is a `PolicyViolation`, not a panic
+  (`test_V_window_shorten_and_uint128_edge`).
+- Shortening `windowSecs` never lets more than the cap leave inside the new window: old amounts
+  are re-evaluated under the new cutoff (same test).
+- An honest spend is never refused for longer than the reference would refuse it, because the
+  current code never over-counts except after a window is lengthened (where the extra count is at
+  most the spend that the lengthened window is meant to cover anyway). The "2/32 over-count"
+  concern in the author's note does not arise; the real defect is the opposite direction (A1-9,
+  A1-10).
+- `_cutoff` clamps to 0 for windows longer than the chain's age; slots with `ts == 0` are never
+  live.
+- Escalation domain, single use across `transfer`/`commit`, atomic revert of the nonce on a
+  failed spend, and all tree/administration properties from round 1 still hold (round-1 tests,
+  adapted to the new signatures, pass).
+- `_pull` delta accounting is `nonReentrant`-protected and cannot be inflated beyond tokens
+  actually held.
+
+### 6.4 Verdict
+
+A1-2 through A1-8 are closed. A1-1 is closed as a denial of service but the replacement window
+is unsound: A1-9 lets any signer, including a delegated one, spend roughly twice any ancestor's
+`perWindowMax` inside a short interval on the most common window lengths (an hour, a day), and
+A1-10 lets it exceed the cap by about 1/32 of the window per cycle. Both break the hierarchical
+budget guarantee that the contract exists to enforce, and both are simple timing plays with no
+preconditions beyond being a signer.
+
+AgentAccounts is therefore NOT fit to proceed to the channel/pool modules or to Fuji until the
+window is reworked as recommended under A1-9 (bucket-end liveness, max-merge, `ceil(W/31)`
+buckets) and a reference-comparison fuzz test over random timestamps and policy changes is added
+and green. The rework is small (one function and one constant) and the reproductions in
+`test/Audit1.t.sol` must pass afterwards. A1-11 can be folded into the same change.
+
+## 7. Resolution of the verification findings (author, 29 Sep 2026)
+
+| Finding | Action |
+| --- | --- |
+| A1-9 High, A1-9b | Fixed. Buckets now record their nominal **end**; a slot is live iff `end > now - windowSecs`; on merge the later end is kept; `bucketLen = ceil(W / 31)` so the ring's period exceeds W and a reused slot is always stale. Value counts for at least W after it is recorded. |
+| A1-10 Medium | Fixed by the same change: liveness by bucket end, so later spends in a bucket never expire before W. |
+| A1-11 Info | Fixed. The co-signer may call `revokeEscalation`; `EscalationRevoked` event; deadline 0 documented as always expired. |
+
+New test `test/WindowFuzz.t.sol`: 5,000 random sequences of spends at random times (concentrated at bucket edges and window boundaries) with administrator window changes in both directions, compared against an in-test copy of the reference `SpendWindow` (which prunes permanently at each check). Asserts the contract never counts less than the reference, and never more than everything recorded within `W + bucketLen` plus one further `Wmax + bucketLen` per window change. That last clause is the one behaviour worth knowing: after an administrator changes the window, value may count for longer than the new window (never shorter), because a live bucket can be merged under a later end. It is stated in the contract header. Reproductions A1-9/A1-9b/A1-10 now assert `>=` (never under-count) and pass; boundary tests were relaxed by one bucket length. 50 tests pass; Slither unchanged (three informational).

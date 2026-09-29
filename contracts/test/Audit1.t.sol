@@ -270,7 +270,9 @@ contract Audit1Test is Test {
         vm.prank(rootSigner);
         vm.expectRevert(abi.encodeWithSelector(AgentAccounts.PolicyViolation.selector, "amount would exceed per_window_max"));
         acc.transfer(root, address(usdc), payee, 1, "", 0);
-        vm.warp(block.timestamp + 1); // now == t + window: cutoff == t, entry dropped
+        vm.warp(block.timestamp + 1); // now == t + window: the reference drops the entry here
+        assertLe(acc.spentInWindow(root), 1000); // bucketed: may persist up to bucketLen - 1 s longer
+        vm.warp(block.timestamp + 117); // bucketLen for W = 3600 is ceil(3600/31) = 117
         assertEq(acc.spentInWindow(root), 0);
         _spend(root, rootSigner, 1000);
     }
@@ -507,5 +509,269 @@ contract Audit1Test is Test {
         assertEq(acc.spentInWindow(root), 500);
         assertEq(acc.escalationNonce(child), 0);
         assertEq(acc.balanceOf(child, address(usdc)), 5000);
+    }
+
+    // ============================================== VERIFICATION (commit 5ea849d)
+
+    /// VERIFY A1-1: spend gas is independent of how many spends preceded it, in the same account
+    /// and in a sibling. 500 dust spends by a child, then a cooled sibling spend and a cooled child
+    /// spend, compared with a cooled spend on a fresh tree.
+    function test_V_A1_1_spend_gas_independent_of_prior_spends() public {
+        bytes32 root = _register(owner, rootSigner, _policy(1e18, type(uint128).max, 86_400), 0);
+        _fund(root, 1e24);
+        bytes32 child = _delegate(root, rootSigner, childSigner, _policy(1e18, type(uint128).max, 1), 0, 1e6);
+        bytes32 sib = _delegate(root, rootSigner, sibSigner, _policy(1e18, type(uint128).max, 86_400), 1, 1e6);
+        // baseline: a sibling spend on a tree that has seen one spend (so slots are non-zero)
+        _spend(sib, sibSigner, 1);
+        vm.cool(address(acc));
+        vm.prank(sibSigner);
+        uint256 g0 = gasleft();
+        acc.transfer(sib, address(usdc), payee, 1000, "", 0);
+        uint256 fresh = g0 - gasleft();
+
+        for (uint256 i = 0; i < 500; i++) {
+            vm.warp(block.timestamp + 7); // spread over many buckets
+            vm.prank(childSigner);
+            acc.transfer(child, address(usdc), payee, 1, "", 0);
+        }
+        vm.cool(address(acc));
+        vm.prank(sibSigner);
+        g0 = gasleft();
+        acc.transfer(sib, address(usdc), payee, 1000, "", 0);
+        uint256 afterDust = g0 - gasleft();
+        vm.cool(address(acc));
+        vm.prank(childSigner);
+        g0 = gasleft();
+        acc.transfer(child, address(usdc), payee, 1, "", 0);
+        uint256 childAfter = g0 - gasleft();
+        emit log_named_uint("sibling spend, fresh tree", fresh);
+        emit log_named_uint("sibling spend, after 500 dust spends", afterDust);
+        emit log_named_uint("child spend, after 500 own spends", childAfter);
+        assertLt(afterDust, fresh + 30_000, "sibling spend cost grew with another account's spend count");
+        assertLt(childAfter, fresh + 30_000, "own spend cost grew with own spend count");
+        assertLt(afterDust, 400_000);
+    }
+
+    /// FINDING A1-9 (High, new): the 32-slot ring does not cover windowSecs. bucketLen = ceil(W/32),
+    /// so the slot for "now" was last used 31*bucketLen + 1 seconds ago at the earliest, which is
+    /// less than W whenever 31*ceil(W/32) < W (W = 3600, 86400 and most W above ~1000). That old
+    /// slot is still live, so the new amount is MERGED under the OLD timestamp and expires with it,
+    /// only ~(W - 31*bucketLen) seconds after being spent. A signer can therefore spend ~2x
+    /// perWindowMax inside a 96-second interval on an hour window. Breaks tree invariant 1.
+    function test_A1_9_ring_wrap_merges_new_spend_under_old_timestamp() public {
+        // W = 3600, bucketLen = 113, slot = (t / 113) % 32
+        bytes32 root = _register(owner, rootSigner, _policy(1000, 1000, 3600), 0);
+        _fund(root, 100_000);
+        uint256 t1 = 1_000_049; // last second of bucket 8849 (slot 17)
+        uint256 t2 = 1_003_553; // first second of bucket 8881 (slot 17 again), t2 - t1 = 3504 < 3600
+        uint256 t3 = t1 + 3600; // 96 seconds after t2
+        vm.warp(t1);
+        _spend(root, rootSigner, 1);
+        vm.warp(t2);
+        _spend(root, rootSigner, 999); // window holds 1, so 999 is allowed; merged under ts = t1
+        assertEq(acc.spentInWindow(root), 1000);
+        vm.warp(t3);
+        // 999 units left 96 seconds ago; the hour window must still hold them
+        assertGe(acc.spentInWindow(root), 999, "FINDING A1-9: spend forgotten after 96 s"); // FIXED: never under-counts (may over-count by < bucketLen)
+        vm.prank(rootSigner);
+        vm.expectRevert(abi.encodeWithSelector(AgentAccounts.PolicyViolation.selector, "amount would exceed per_window_max"));
+        acc.transfer(root, address(usdc), payee, 1000, "", 0);
+    }
+
+    /// FINDING A1-9 (variant): the same merge-under-old-timestamp happens after an administrator
+    /// LENGTHENS windowSecs (a tightening), because the slot index remaps and a live slot from the
+    /// old mapping can be the target for a new spend. Owner doubles the window; signer spends 2x.
+    function test_A1_9b_lengthening_window_lets_signer_double_spend_cap() public {
+        // W1 = 3200 (bucketLen 100): t1 = 1_000_000 is bucket 10000, slot 16
+        bytes32 root = _register(owner, rootSigner, _policy(1000, 1000, 3200), 0);
+        _fund(root, 100_000);
+        uint256 t1 = 1_000_000;
+        vm.warp(t1);
+        _spend(root, rootSigner, 1);
+        vm.prank(owner);
+        acc.setPolicy(root, _policy(1000, 1000, 6400)); // bucketLen 200
+        uint256 t2 = 1_001_600; // bucket 5008, slot 16, live (t2 - t1 < 6400): merged under ts = t1
+        vm.warp(t2);
+        _spend(root, rootSigner, 999);
+        uint256 t3 = t1 + 6400; // 4800 s after t2, inside the 6400 s window
+        vm.warp(t3);
+        assertGe(acc.spentInWindow(root), 999, "FINDING A1-9b: spend forgotten 1600 s early"); // FIXED: never under-counts (may over-count by < bucketLen)
+        vm.prank(rootSigner);
+        vm.expectRevert(abi.encodeWithSelector(AgentAccounts.PolicyViolation.selector, "amount would exceed per_window_max"));
+        acc.transfer(root, address(usdc), payee, 1000, "", 0);
+    }
+
+    /// FINDING A1-10 (Medium, new): a slot is live by its FIRST timestamp, so every later spend in
+    /// the same bucket expires when the first one does, up to bucketLen - 1 seconds early. The
+    /// header's claim that bucketing "can only over-count" is reversed: it only under-counts. A
+    /// signer can spend 2x perWindowMax - 1 within W - bucketLen + 1 seconds.
+    function test_A1_10_same_bucket_spends_expire_with_the_first() public {
+        bytes32 root = _register(owner, rootSigner, _policy(1000, 1000, 3600), 0);
+        _fund(root, 100_000);
+        uint256 t1 = 999_937;       // first second of bucket 8849
+        uint256 t2 = t1 + 112;      // last second of the same bucket
+        uint256 t3 = t1 + 3600;     // 3488 s after t2
+        vm.warp(t1);
+        _spend(root, rootSigner, 1);
+        vm.warp(t2);
+        _spend(root, rootSigner, 999);
+        vm.warp(t3);
+        assertGe(acc.spentInWindow(root), 999, "FINDING A1-10: spend forgotten 112 s early"); // FIXED: never under-counts (may over-count by < bucketLen)
+        vm.prank(rootSigner);
+        vm.expectRevert(abi.encodeWithSelector(AgentAccounts.PolicyViolation.selector, "amount would exceed per_window_max"));
+        acc.transfer(root, address(usdc), payee, 1000, "", 0);
+    }
+
+    /// VERIFY window: shortening windowSecs can never let more than the cap leave inside the NEW
+    /// window (old amounts are counted under the new cutoff), and a bucket sum cannot overflow
+    /// uint128 with perWindowMax at the maximum.
+    function test_V_window_shorten_and_uint128_edge() public {
+        bytes32 root = _register(owner, rootSigner, _policy(1000, 1000, 3600), 0);
+        _fund(root, 100_000);
+        _spend(root, rootSigner, 1000);
+        vm.prank(owner);
+        acc.setPolicy(root, _policy(1000, 1000, 60));
+        vm.warp(block.timestamp + 59);
+        vm.prank(rootSigner);
+        vm.expectRevert(abi.encodeWithSelector(AgentAccounts.PolicyViolation.selector, "amount would exceed per_window_max"));
+        acc.transfer(root, address(usdc), payee, 1, "", 0);
+        // the entry was bucketed under the OLD window (bucketLen 117), so it may persist up to 116 s past
+        // the reference's drop time: shortening a window can only over-count, never under-count
+        vm.warp(block.timestamp + 1 + 117);
+        _spend(root, rootSigner, 1000);
+
+        bytes32 big = _register(owner, sibSigner, _policy(type(uint128).max, type(uint128).max, 3600), 0);
+        usdc.mint(address(this), type(uint128).max);
+        usdc.approve(address(acc), type(uint128).max);
+        acc.deposit(big, address(usdc), type(uint128).max);
+        _fund(big, 1);
+        vm.prank(sibSigner);
+        acc.transfer(big, address(usdc), payee, type(uint128).max, "", 0);
+        vm.prank(sibSigner);
+        vm.expectRevert(abi.encodeWithSelector(AgentAccounts.PolicyViolation.selector, "amount would exceed per_window_max"));
+        acc.transfer(big, address(usdc), payee, 1, "", 0); // no uint128 overflow panic, a policy revert
+    }
+
+    /// VERIFY A1-2: deposit and refund credit what arrived.
+    function test_V_A1_2_delta_accounting() public {
+        FeeToken fee = new FeeToken();
+        bytes32 a = _register(owner, rootSigner, _policy(type(uint128).max, type(uint128).max, 3600), 0);
+        fee.mint(address(this), 1000);
+        fee.approve(address(acc), 1000);
+        acc.deposit(a, address(fee), 1000);
+        assertEq(acc.balanceOf(a, address(fee)), 990);
+        assertEq(fee.balanceOf(address(acc)), 990);
+        address[] memory mods = new address[](1);
+        mods[0] = module;
+        acc.lockModules(mods);
+        vm.prank(module);
+        acc.commit(a, rootSigner, address(fee), payee, 990, "", 0); // module receives 990 - 9
+        assertEq(fee.balanceOf(module), 981);
+        vm.startPrank(module);
+        fee.approve(address(acc), 981);
+        vm.expectEmit(true, true, false, true, address(acc));
+        emit AgentAccounts.Refunded(a, address(fee), 972, module); // 981 - 9 arrives
+        acc.refund(a, address(fee), 981);
+        vm.stopPrank();
+        assertEq(acc.balanceOf(a, address(fee)), 972);
+        assertEq(fee.balanceOf(address(acc)), 972);
+    }
+
+    /// VERIFY A1-3: zero and self payees are refused on both spend paths.
+    function test_V_A1_3_bad_payees() public {
+        bytes32 root = _register(owner, rootSigner, _policy(1000, 1000, 3600), 0);
+        _fund(root, 1000);
+        address[] memory mods = new address[](1);
+        mods[0] = module;
+        acc.lockModules(mods);
+        vm.prank(rootSigner);
+        vm.expectRevert(AgentAccounts.BadPayee.selector);
+        acc.transfer(root, address(usdc), address(acc), 1, "", 0);
+        vm.prank(rootSigner);
+        vm.expectRevert(AgentAccounts.BadPayee.selector);
+        acc.transfer(root, address(usdc), address(0), 1, "", 0);
+        vm.prank(module);
+        vm.expectRevert(AgentAccounts.BadPayee.selector);
+        acc.commit(root, rootSigner, address(usdc), address(acc), 1, "", 0);
+        vm.prank(module);
+        vm.expectRevert(AgentAccounts.BadPayee.selector);
+        acc.commit(root, rootSigner, address(usdc), address(0), 1, "", 0);
+    }
+
+    function _escSigD(bytes32 id, address to, uint256 amount, uint64 deadline) internal view returns (bytes memory) {
+        bytes32 digest = acc.escalationDigest(id, address(usdc), to, amount, acc.escalationNonce(id), deadline);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(escKey, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    /// VERIFY A1-4: deadline is signed and enforced (deadline 0 = already expired); revoke by the
+    /// signer, owner or an ancestor's signer kills an outstanding signature; strangers and the
+    /// co-signer itself cannot revoke.
+    function test_V_A1_4_deadline_and_revoke() public {
+        AgentAccounts.PolicyInput memory p = _policy(100, 100_000, 3600);
+        p.escalation = esc;
+        bytes32 root = _register(owner, rootSigner, p, 0);
+        bytes32 child = _delegate(root, rootSigner, childSigner, p, 0, 0);
+        _fund(root, 100_000);
+        _fund(child, 100_000);
+        uint64 d = uint64(block.timestamp + 100);
+        bytes memory sig = _escSigD(root, payee, 500, d);
+        // wrong deadline in the call, expired deadline, zero deadline
+        vm.prank(rootSigner);
+        vm.expectRevert(AgentAccounts.BadEscalation.selector);
+        acc.transfer(root, address(usdc), payee, 500, sig, d + 1);
+        bytes memory sig0 = _escSigD(root, payee, 500, 0);
+        vm.prank(rootSigner);
+        vm.expectRevert(AgentAccounts.BadEscalation.selector);
+        acc.transfer(root, address(usdc), payee, 500, sig0, 0);
+        vm.warp(uint256(d) + 1);
+        vm.prank(rootSigner);
+        vm.expectRevert(AgentAccounts.BadEscalation.selector);
+        acc.transfer(root, address(usdc), payee, 500, sig, d);
+        vm.warp(uint256(d)); // exactly at the deadline is still valid
+        // revocation
+        vm.prank(other);
+        vm.expectRevert(AgentAccounts.Unauthorized.selector);
+        acc.revokeEscalation(root);
+        vm.prank(esc);
+        acc.revokeEscalation(root); // FIXED A1-11: the co-signer may withdraw its own approval
+        vm.prank(rootSigner);
+        acc.revokeEscalation(root);
+        assertEq(acc.escalationNonce(root), 2); // co-signer's revoke and signer's revoke each advance it
+        vm.prank(rootSigner);
+        vm.expectRevert(AgentAccounts.BadEscalation.selector);
+        acc.transfer(root, address(usdc), payee, 500, sig, d);
+        sig = _escSigD(root, payee, 500, d); // re-signed under nonce 1 works
+        vm.prank(rootSigner);
+        acc.transfer(root, address(usdc), payee, 500, sig, d);
+        // owner and ancestor signer can revoke a child's
+        bytes memory csig = _escSigD(child, payee, 500, d);
+        vm.prank(owner);
+        acc.revokeEscalation(child);
+        vm.prank(rootSigner);
+        acc.revokeEscalation(child);
+        assertEq(acc.escalationNonce(child), 2);
+        vm.prank(childSigner);
+        vm.expectRevert(AgentAccounts.BadEscalation.selector);
+        acc.transfer(child, address(usdc), payee, 500, csig, d);
+        vm.prank(sibSigner); // not in the lineage
+        vm.expectRevert(AgentAccounts.Unauthorized.selector);
+        acc.revokeEscalation(child);
+    }
+
+    /// VERIFY A1-5 and A1-8: refund of zero is refused; allowList is dropped when hasAllowList is false.
+    function test_V_A1_5_A1_8_refund_zero_and_allowlist_storage() public {
+        AgentAccounts.PolicyInput memory p = _policy(1000, 1000, 3600);
+        p.allowList = new address[](2);
+        p.allowList[0] = payee;
+        p.allowList[1] = other;
+        bytes32 root = _register(owner, rootSigner, p, 0);
+        assertEq(acc.policyOf(root).allowList.length, 0);
+        address[] memory mods = new address[](1);
+        mods[0] = module;
+        acc.lockModules(mods);
+        vm.prank(module);
+        vm.expectRevert(AgentAccounts.ZeroAmount.selector);
+        acc.refund(root, address(usdc), 0);
     }
 }

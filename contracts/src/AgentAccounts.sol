@@ -25,9 +25,14 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 ///    spend, replay-protected by a per-account escalation nonce and a deadline;
 ///  * the spend window is a fixed ring of SLOTS time buckets rather than a list of
 ///    entries, so the cost of a spend is independent of how many spends preceded it
-///    (AUDIT-1 A1-1). Bucketing can only over-count: value recorded in a bucket
-///    counts until the bucket's first timestamp leaves the window, so the on-chain
-///    window is at most 2/SLOTS of `windowSecs` more conservative than the reference;
+///    (AUDIT-1 A1-1). Each bucket spans bucketLen = ceil(windowSecs / (SLOTS-1)) seconds
+///    and is live while its end is inside the window, so the ring's period
+///    (SLOTS * bucketLen) always exceeds windowSecs and a reused slot is stale. Value
+///    counts for at least windowSecs and, while the window is unchanged, at most
+///    windowSecs + bucketLen - 1: the on-chain window can only be more conservative
+///    than the reference (A1-9, A1-10). When an administrator changes windowSecs, a
+///    live bucket may be merged under a later end, so recorded value may count for up
+///    to one further window per change; never for less;
 ///  * payees may not be this contract or the zero address (A1-3); deposits and
 ///    refunds credit the amount actually received (A1-2).
 contract AgentAccounts is ReentrancyGuard, EIP712 {
@@ -57,9 +62,11 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
         address[] denyList;
     }
 
-    /// One time bucket of the spend window: the earliest timestamp recorded in it, and the total.
+    /// One time bucket of the spend window: the bucket's nominal end (last second) and the total recorded.
+    /// A slot is live while `end > now - windowSecs`; a spend at t <= end therefore counts for at least
+    /// windowSecs after t, and at most bucketLen - 1 seconds longer (over-count only).
     struct Slot {
-        uint64 ts;
+        uint64 end;
         uint128 amount;
     }
 
@@ -95,6 +102,7 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
     event Registered(bytes32 indexed id, address indexed owner, address indexed signer, bytes32 parent);
     event Deposited(bytes32 indexed id, address indexed token, uint256 amount, address from);
     event Refunded(bytes32 indexed id, address indexed token, uint256 amount, address module);
+    event EscalationRevoked(bytes32 indexed id, address by, uint64 newNonce);
     event Spent(bytes32 indexed id, address indexed token, address indexed payee, uint256 amount, bool escalated);
     event Delegated(bytes32 indexed parent, bytes32 indexed child, address token, uint256 fund);
     event Recalled(bytes32 indexed parent, bytes32 indexed child, address token, uint256 amount);
@@ -315,7 +323,7 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
         uint256 cutoff = _cutoff(a.policy.windowSecs);
         for (uint256 i = 0; i < SLOTS; i++) {
             Slot storage sl = a.window[i];
-            if (sl.ts > cutoff) total += sl.amount;
+            if (sl.end > cutoff) total += sl.amount;
         }
     }
 
@@ -336,11 +344,15 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
         return _hashTypedDataV4(keccak256(abi.encode(ESCALATION_TYPEHASH, id, token, payee, amount, nonce, deadline)));
     }
 
-    /// @notice Invalidate any outstanding escalation signature for `id`. Signer, owner or an ancestor's signer.
+    /// @notice Invalidate any outstanding escalation signature for `id`. Signer, owner, an ancestor's
+    /// signer, or the policy's co-signer itself (A1-11).
     function revokeEscalation(bytes32 id) external {
         Account storage a = _account(id);
-        if (msg.sender != a.signer && !_mayAdminister(a, msg.sender)) revert Unauthorized();
+        if (msg.sender != a.signer && msg.sender != a.policy.escalation && !_mayAdminister(a, msg.sender)) {
+            revert Unauthorized();
+        }
         a.escalationNonce += 1;
+        emit EscalationRevoked(id, msg.sender, a.escalationNonce);
     }
 
     // -------------------------------------------------------------- internals
@@ -400,7 +412,7 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
     ) internal returns (bool) {
         if (sig.length == 0) return false;
         if (a.policy.escalation == address(0)) revert BadEscalation();
-        if (block.timestamp > deadline) revert BadEscalation();
+        if (block.timestamp > deadline) revert BadEscalation(); // a deadline of 0 is always expired
         bytes32 digest = escalationDigest(id, token, payee, amount, a.escalationNonce, deadline);
         (address rec, ECDSA.RecoverError err,) = ECDSA.tryRecover(digest, sig);
         if (err != ECDSA.RecoverError.NoError || rec != a.policy.escalation) revert BadEscalation();
@@ -438,22 +450,29 @@ contract AgentAccounts is ReentrancyGuard, EIP712 {
         uint256 cutoff = _cutoff(a.policy.windowSecs);
         for (uint256 i = 0; i < SLOTS; i++) {
             Slot storage sl = a.window[i];
-            if (sl.ts > cutoff) total += sl.amount;
+            if (sl.end > cutoff) total += sl.amount;
         }
     }
 
-    /// @dev Add `amount` to the bucket for now. A live bucket (its first timestamp still inside the window)
-    /// keeps that earlier timestamp, so the sum can only over-count; a stale bucket is restarted.
+    /// @dev Add `amount` to the bucket for now. bucketLen = ceil(W / (SLOTS-1)), so (SLOTS-1) * bucketLen >= W
+    /// and the slot for now was last used more than W seconds ago whenever it is not the same bucket: a
+    /// live slot is only ever this bucket, or a bucket left over from a longer earlier window (after a
+    /// policy change), in which case the amounts merge under the later end. Either way nothing recorded
+    /// stops counting before W seconds have passed.
     function _record(Account storage a, uint256 amount) internal {
-        uint256 bucketLen = (uint256(a.policy.windowSecs) + SLOTS - 1) / SLOTS; // >= 1
+        uint256 w = a.policy.windowSecs;
+        uint256 bucketLen = (w + SLOTS - 2) / (SLOTS - 1); // ceil(w / (SLOTS-1)), >= 1
+        uint256 bucket = block.timestamp / bucketLen;
+        uint64 curEnd = uint64(bucket * bucketLen + bucketLen - 1);
         // slither-disable-next-line weak-prng  (a bucket index, not randomness)
-        Slot storage sl = a.window[(block.timestamp / bucketLen) % SLOTS];
-        if (sl.ts > _cutoff(a.policy.windowSecs)) {
+        Slot storage sl = a.window[bucket % SLOTS];
+        if (sl.end > _cutoff(uint32(w))) {
+            if (curEnd > sl.end) sl.end = curEnd;
             // amount <= MAX_AMOUNT (checked in _requireFunds); sum bounded by perWindowMax (uint128) after _check
             // forge-lint: disable-next-line(unsafe-typecast)
             sl.amount += uint128(amount);
         } else {
-            sl.ts = uint64(block.timestamp);
+            sl.end = curEnd;
             // forge-lint: disable-next-line(unsafe-typecast)
             sl.amount = uint128(amount);
         }
