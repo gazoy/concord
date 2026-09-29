@@ -228,7 +228,7 @@ def _run(P: Params) -> dict:
     }
 
 
-def sweep(quick: bool) -> list[dict]:
+def sweep(quick: bool):
     ds = [0, 1, 5, 10, 30, 60, 300]
     cells = []
     for d in ds:
@@ -240,15 +240,16 @@ def sweep(quick: bool) -> list[dict]:
     seeds = range(2 if quick else 20)
     if quick:
         cells = cells[::9]
-    rows = []
     for (d, c_w, n_a, n_b, p, depth) in cells:
+        cell_rows = []
         for seed in seeds:
             P = Params(d=d, C=1000, c_w=c_w, n_a=n_a, n_b=n_b, p=p, m=20, W=600, depth=depth,
                        duration=300 if quick else 1800, seed=seed)
-            rows.append(run(P))
+            r = run(P)
+            cell_rows.append(r)
+            yield r
         print(f"cell d={d} c_w={c_w} n=({n_a},{n_b}) p={p} depth={depth}: "
-              f"max overshoot {max(r['overshoot_max'] for r in rows[-len(seeds):])}", flush=True)
-    return rows
+              f"max overshoot {max(r.get('overshoot_max', 0) for r in cell_rows)}", flush=True)
 
 
 FIELDS = ["d", "C", "c_w", "n_a", "n_b", "p", "m", "W", "depth", "duration", "seed", "applied", "refused",
