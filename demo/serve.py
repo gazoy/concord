@@ -7,6 +7,7 @@ Endpoints: POST /infer (x402, 3 units per call); /ledger/* (see foliant/node.py)
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -28,6 +29,12 @@ def make_app():
                          descriptor={"model": "echo-1"}, pool_id=pool.id)
     L.publish_offer(offer)
     app, gate = build_app(L, provider, offer)
+
+    @app.middleware("http")
+    async def wall_clock(request, call_next):
+        # the devnet ledger's clock follows real time, so channel and pool timeouts work for live clients
+        L.now = max(L.now, int(time.time()))
+        return await call_next(request)
 
     @app.post("/settle")
     def settle():
