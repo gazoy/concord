@@ -40,8 +40,10 @@ The project was called Concord until 28 September 2026; the name was changed to 
 
 ```bash
 pip install -r requirements.txt
-python demo/run_demo.py     # four scenarios, ~1 s
-pytest                      # 22 tests incl. property-based invariants
+python demo/run_demo.py     # four scenarios: channel, pool, policy, exit; ~1 s
+python demo/run_uses.py     # six further uses: containment, insurable agent, abuse control,
+                            # cross-company trade, delegated money, device fleet
+pytest                      # 23 tests incl. property-based invariants
 ```
 
 ## Layout
@@ -56,7 +58,7 @@ pytest                      # 22 tests incl. property-based invariants
 | `foliant/ledger.py` | §5 (state only) | In-memory ledger: envelopes, nonces, policy enforcement, escrow accounting |
 | `foliant/agent.py` | SDK | Agent-side helper: builds envelopes and off-chain updates |
 | `foliant/x402.py` | §6.5, §6.9 | `PaymentGate` (provider middleware, FastAPI) and `AgentHttpClient` (pays on 402) |
-| `demo/` | | A metered API and the four-scenario demo |
+| `demo/` | | A metered API, the four-scenario demo and six further use-case scenarios |
 | `tests/` | §10 | Invariants: conservation, bounds, replay, stale/forged updates, unilateral exit, policy windows |
 
 ## The rule that matters

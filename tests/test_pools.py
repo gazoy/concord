@@ -89,3 +89,19 @@ def test_stale_update_in_batch_is_skipped_not_fatal(world):
     ub1 = b.pay_pool(pool.id, 7)
     assert L.coordinator_settle_pool(pool.id, [ua2]) == 10
     assert L.coordinator_settle_pool(pool.id, [ua1, ub1]) == 7  # ua1 stale, skipped
+
+
+def test_settle_skips_exited_member(world):
+    """A coordinator's batch settle after a member has exited must not fail."""
+    L, _ = world
+    coord = KeyPair.from_seed(b"c")
+    pool = L.create_pool(coord.address, ASSET, timeout_secs=10, bond=0)
+    a, b = make_agent(L, "a"), make_agent(L, "b")
+    a.join_pool(pool.id, 100)
+    b.join_pool(pool.id, 100)
+    ua = a.pay_pool(pool.id, 5)
+    ub = b.pay_pool(pool.id, 7)
+    a.begin_exit(pool.id)  # pays the coordinator a's 5 on exit
+    L.advance(11)
+    a.finalize_exit(pool.id)
+    assert L.coordinator_settle_pool(pool.id, [ua, ub]) == 7  # a exited: skipped, not fatal

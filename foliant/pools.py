@@ -78,12 +78,15 @@ class Pool:
     def settle(self, updates: list[tuple[Signed, str, PublicKey]]) -> list[Transfer]:
         """Coordinator submits [(update, account_id, signer)] for any subset of members.
 
-        Updates that are stale (seq <= applied) are skipped rather than failing
-        the batch, so one member's old update cannot block everyone's settlement.
+        Updates that are stale (seq <= applied) or from members who have already
+        exited are skipped rather than failing the batch, so one member cannot
+        block everyone's settlement.
         """
         effects: list[Transfer] = []
         for update, account_id, signer in updates:
-            c = self._claim(account_id)
+            c = self.members.get(account_id)
+            if c is None or c.exited:
+                continue
             seq, balance = verify_update(update, kind="pool", obj_id=self.id, account_id=account_id, signer=signer)
             if seq <= c.seq:
                 continue
