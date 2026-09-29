@@ -1,4 +1,4 @@
-"""Cross-chain budget tree simulation. Implements sim/SPEC.md v1.0 exactly; any
+"""Cross-chain budget tree simulation. Implements sim/SPEC.md v1.3 exactly; any
 deviation is a defect. Run `python sim/crosschain.py` for the full sweep or
 `python sim/crosschain.py --quick` for a smoke test.
 """
@@ -70,12 +70,15 @@ def build_side(name: str, P: Params, fund_here: set[str]) -> Side:
         funded = label in fund_here
         w = root.delegate(KeyPair.from_seed(f"{label}-signer".encode()), wpol,
                           fund=10 ** 6 if funded else 0, asset=ASSET, salt=i)
-        leaf = w
-        if P.depth == 2:
-            leaf = w.delegate(KeyPair.from_seed(f"{label}-sub-signer".encode()), wpol,
-                              fund=10 ** 6 if funded else 0, asset=ASSET, salt=100 + i)
         if funded:
-            spenders.append(leaf)
+            spenders.append(w)
+        if P.depth == 2:
+            # the sub-worker has half the worker's cap; both spend, concurrently
+            sub = w.delegate(KeyPair.from_seed(f"{label}-sub-signer".encode()),
+                             Policy(per_tx_max=P.c_w, per_window_max=P.c_w // 2, window_secs=P.W),
+                             fund=10 ** 5 if funded else 0, asset=ASSET, salt=100 + i)
+            if funded:
+                spenders.append(sub)
     return Side(name, L, root, spenders)
 
 
@@ -84,6 +87,13 @@ def chain_ids(side: Side, agent: Agent) -> list[str]:
 
 
 def run(P: Params) -> dict:
+    try:
+        return _run(P)
+    except AssertionError as e:
+        return {**P.__dict__, "invariant_error": str(e), "H1": False, "H2": False, "H3": False, "H4": False}
+
+
+def _run(P: Params) -> dict:
     rng = random.Random(P.seed)
     a_labels = {f"a{i}" for i in range(P.n_a)}
     b_labels = {f"b{i}" for i in range(P.n_b)}
@@ -94,7 +104,11 @@ def run(P: Params) -> dict:
     supply0 = {s.name: s.ledger.total_supply(ASSET) for s in sides.values()}
 
     applied: list[Spend] = []  # ground truth
-    refused = 0
+    refused = 0            # refused by the ledger (an ancestor's policy)
+    refused_signer = 0     # refused by the leaf's own signer before reaching the ledger
+    tight_violations = 0   # overshoot(t) > remote unseen at the last spend at or before t
+    unseen_at_last_spend = 0
+    invariant_error = ""
     overshoot_max = 0
     overshoot_secs = 0
     last_spend_t = T0
@@ -130,17 +144,30 @@ def run(P: Params) -> dict:
         # 2. spend attempts (none after `duration`; the tail lets the relay drain)
         seen_before_spends = seen_by_all(t)
         applied_this_second = 0
-        if step <= P.duration:
+        if step < P.duration:
             for s in sides.values():
                 for ag in s.spenders:
                     if rng.random() < P.p:
                         amt = rng.randint(1, P.m)
+                        chain = chain_ids(s, ag)
+                        # §6 invariant 3, at spend time, against the local view of every account
+                        # in the lineage: if the ledger accepts, no local window was over its cap
+                        room = all(s.ledger.accounts[c].window.spent(t, P.W) + amt
+                                   <= s.ledger.accounts[c].policy.per_window_max for c in chain)
                         try:
                             ag.transfer(OUTSIDE, ASSET, amt)
-                        except PolicyViolation:
-                            refused += 1
+                        except PolicyViolation as e:
+                            # was it the signer or the ledger? the signer raises before apply()
+                            if ag.signer.window.spent(t, P.W) + amt > ag.signer.policy.per_window_max:
+                                refused_signer += 1
+                            else:
+                                refused += 1
                             continue
-                        sp = Spend(t, amt, chain_ids(s, ag), s.name)
+                        if not room:
+                            raise AssertionError("ledger applied a spend a local window should have refused")
+                        sp = Spend(t, amt, chain, s.name)
+                        # tight bound: what the other side applied in (t - d, t], unseen here now
+                        unseen_at_last_spend = remote_in_delay_window(t, s.name)
                         applied.append(sp)
                         s.outbox.append(sp)
                         last_spend_t = t
@@ -157,6 +184,8 @@ def run(P: Params) -> dict:
             overshoot_max = max(overshoot_max, over)
             if t > last_spend_t:
                 overshoot_after_last += 1
+            if over > unseen_at_last_spend:
+                tight_violations += 1
         for name in sides:
             bound_rate = max(bound_rate, remote_in_delay_window(t, name))
         # 4. invariants (§6)
@@ -170,35 +199,31 @@ def run(P: Params) -> dict:
                 got = acct.window.spent(t, P.W)
                 assert got == expect, f"{s.name} {acct.id[:6]} window {got} != known subtree {expect}"
 
-    # per-account own-cap invariant: every applied spend was within its leaf's local window
-    # (guaranteed by the ledger; checked here by reconstruction)
-    for side_name in sides:
-        by_leaf: dict[str, list[Spend]] = {}
-        for sp in applied:
-            if sp.side == side_name:
-                by_leaf.setdefault(sp.chain[0], []).append(sp)
-        for leaf, sps in by_leaf.items():
-            for i, sp in enumerate(sps):
-                in_win = sum(x.amount for x in sps[: i + 1] if sp.t - P.W < x.t <= sp.t)
-                assert in_win <= P.c_w, "leaf exceeded its own cap"
-
-    # H3 bound: the remote side's workers can never exceed their own caps. The remote side
-    # relative to A is B and vice versa; overshoot can come from either, so take the max.
-    bound_caps = max(P.c_w * P.n_a, P.c_w * P.n_b)
+    # H3 bound: overshoot is at most what the remote side could commit unseen, which its
+    # own local caps limit, and each ledger caps its own local spends at C. Overshoot can
+    # originate from either side, so the bound is min(C, larger side's caps); reported with
+    # the sum-of-caps slack too.
+    side_caps = {"A": P.c_w * P.n_a * (1.5 if P.depth == 2 else 1), "B": P.c_w * P.n_b * (1.5 if P.depth == 2 else 1)}
+    bound_caps = int(min(P.C, max(side_caps.values())))
+    slack_caps = int(sum(side_caps.values()) - P.C)
 
     return {
         **P.__dict__,
         "applied": len(applied),
         "refused": refused,
+        "refused_signer": refused_signer,
         "overshoot_max": overshoot_max,
         "overshoot_secs": overshoot_secs,
         "overshoot_after_last": overshoot_after_last,
         "bound_rate": bound_rate,
         "bound_caps": bound_caps,
+        "slack_caps": slack_caps,
         "h4_violations": h4_violations,
+        "tight_violations": tight_violations,
+        "invariant_error": invariant_error,
         "H1": (P.d > 0) or overshoot_max == 0,
-        "H2": overshoot_max <= bound_rate,
-        "H3": overshoot_max <= bound_caps,
+        "H2": P.d == 0 or (overshoot_max <= bound_rate and tight_violations == 0),
+        "H3": overshoot_max <= bound_caps and overshoot_max <= max(0, slack_caps),
         "H4": h4_violations == 0,
     }
 
@@ -226,23 +251,67 @@ def sweep(quick: bool) -> list[dict]:
     return rows
 
 
+FIELDS = ["d", "C", "c_w", "n_a", "n_b", "p", "m", "W", "depth", "duration", "seed", "applied", "refused",
+          "refused_signer", "overshoot_max", "overshoot_secs", "overshoot_after_last", "bound_rate", "bound_caps",
+          "slack_caps", "h4_violations", "tight_violations", "invariant_error", "H1", "H2", "H3", "H4"]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--out", default=str(Path(__file__).with_name("results.csv")))
     args = ap.parse_args()
-    rows = sweep(args.quick)
+    rows: list[dict] = []
     with open(args.out, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w = csv.DictWriter(f, fieldnames=FIELDS, extrasaction="ignore")
         w.writeheader()
-        w.writerows(rows)
-    for h in ("H1", "H2", "H3", "H4"):
-        fails = [r for r in rows if not r[h]]
-        print(f"{h}: {'PASS' if not fails else 'FAIL'} ({len(rows) - len(fails)}/{len(rows)})")
+        for r in sweep(args.quick):
+            rows.append(r)
+            w.writerow({k: r.get(k, "") for k in FIELDS})
+            f.flush()
+    summary = []
+    for h, subset in (("H1", [r for r in rows if r["d"] == 0]), ("H2", [r for r in rows if r["d"] > 0]),
+                      ("H3", rows), ("H4", rows), ("H5", [r for r in rows if r["depth"] == 2 and r["d"] > 0])):
+        key = "H2" if h == "H5" else h
+        fails = [r for r in subset if not r[key]]
+        summary.append((h, len(subset) - len(fails), len(subset), fails))
+        print(f"{h}: {'PASS' if not fails else 'FAIL'} ({len(subset) - len(fails)}/{len(subset)})")
         for r in fails[:5]:
-            print("   ", {k: r[k] for k in ("d", "c_w", "n_a", "n_b", "p", "depth", "seed", "overshoot_max", "bound_rate", "bound_caps")})
-    h5 = all(r["H2"] for r in rows if r["depth"] == 2)
-    print(f"H5: {'PASS' if h5 else 'FAIL'}")
+            print("   ", {k: r.get(k) for k in ("d", "c_w", "n_a", "n_b", "p", "depth", "seed", "overshoot_max", "bound_rate", "bound_caps", "invariant_error")})
+    write_report(rows, summary, Path(args.out).parent)
+
+
+def write_report(rows: list[dict], summary, out_dir: Path) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    ds = sorted({r["d"] for r in rows})
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    for (p, c_w), mk in (((0.05, 300), "o"), ((0.05, 1000), "s"), ((0.5, 300), "^"), ((0.5, 1000), "D")):
+        ys = [max((r["overshoot_max"] for r in rows if r["d"] == d and r["p"] == p and r["c_w"] == c_w), default=0) for d in ds]
+        bs = [max((r["bound_rate"] for r in rows if r["d"] == d and r["p"] == p and r["c_w"] == c_w), default=0) for d in ds]
+        ax.plot(ds, ys, marker=mk, label=f"max overshoot, p={p}, c_w={c_w}")
+        ax.plot(ds, bs, linestyle=":", color=ax.lines[-1].get_color(), label=f"H2 bound (rate x delay), p={p}, c_w={c_w}")
+    ax.set_xscale("symlog", linthresh=1)
+    ax.set_xlabel("relay delay d (s)")
+    ax.set_ylabel("units (root cap C = 1000)")
+    ax.set_title("Cross-chain budget tree: worst overshoot vs relay delay")
+    ax.legend(fontsize=7)
+    fig.tight_layout()
+    fig.savefig(out_dir / "overshoot.png", dpi=150)
+    lines = ["# Results", "", f"Runs: {len(rows)}. Generated by `python sim/crosschain.py`; spec sim/SPEC.md.", "",
+             "| Hypothesis | Pass | Of |", "| --- | --- | --- |"]
+    for h, ok, n, _ in summary:
+        lines.append(f"| {h} | {ok} | {n} |")
+    lines += ["", "## Worst case per delay", "", "| d | max overshoot | max bound_rate | max overshoot / bound | refused (ledger) | refused (signer) |", "| --- | --- | --- | --- | --- | --- |"]
+    for d in ds:
+        sub = [r for r in rows if r["d"] == d]
+        mo = max(r["overshoot_max"] for r in sub)
+        mb = max(r["bound_rate"] for r in sub)
+        ratio = max((r["overshoot_max"] / r["bound_rate"] for r in sub if r["bound_rate"]), default=0)
+        lines.append(f"| {d} | {mo} | {mb} | {ratio:.2f} | {sum(r['refused'] for r in sub)} | {sum(r['refused_signer'] for r in sub)} |")
+    lines += ["", "![overshoot](overshoot.png)", ""]
+    (out_dir / "RESULTS-auto.md").write_text("\n".join(lines))
 
 
 if __name__ == "__main__":

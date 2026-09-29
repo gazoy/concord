@@ -92,6 +92,11 @@ class Policy:
         Runtime enforcement up the tree makes this a guarantee at delegation time
         rather than the only line of defence: a child that somehow held a wider
         policy would still be bounded by its ancestors at every spend.
+
+        Not compared, deliberately: `window_secs` (a child may meter over a shorter
+        window than its parent; the parent's window still binds the subtree) and
+        `escalation` (a child's co-signer lifts only the child's own per_tx_max;
+        see Ledger._authorise).
         """
         if self.per_tx_max > parent.per_tx_max:
             raise PolicyViolation(f"child per_tx_max {self.per_tx_max} exceeds parent {parent.per_tx_max}")

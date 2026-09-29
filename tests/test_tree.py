@@ -129,3 +129,32 @@ def test_no_branch_exceeds_any_ancestor(root_cap, caps, spends):
         assert subtree <= n.account.policy.per_window_max
         assert n.account.window.spent(L.now, HOUR) == subtree
     assert L.total_supply(ASSET) == 100_000
+
+
+def test_escalation_lifts_only_the_signing_account(world):
+    """Audit D11: a child's co-signer must not lift an ancestor's per_tx_max."""
+    L, _ = world
+    duty = KeyPair.from_seed(b"duty")
+    root = make_agent(L, "root", Policy(per_tx_max=10, per_window_max=1_000, window_secs=HOUR))
+    child = root.delegate(KeyPair.from_seed(b"c"), Policy(per_tx_max=10, per_window_max=1_000, window_secs=HOUR,
+                                                           escalation=duty.public), fund=1_000, asset=ASSET)
+    with pytest.raises(PolicyViolation, match="per_tx_max 10"):
+        child.transfer(OUTSIDE, ASSET, 500, escalate_with=duty)  # lifts the child's cap, not the root's
+    root_esc = KeyPair.from_seed(b"root-duty")
+    root2 = make_agent(L, "root2", Policy(per_tx_max=10, per_window_max=1_000, window_secs=HOUR, escalation=root_esc.public))
+    root2.transfer(OUTSIDE, ASSET, 500, escalate_with=root_esc)  # the root's own co-signer does lift the root's cap
+
+
+def test_signer_window_rolls_back_when_ledger_refuses(world):
+    """Audit D1: a spend the ledger refuses must not stay charged on the enclave side."""
+    L, _ = world
+    root = make_agent(L, "root", Policy(per_tx_max=100, per_window_max=100, window_secs=HOUR))
+    a = root.delegate(KeyPair.from_seed(b"a"), Policy(per_tx_max=100, per_window_max=100, window_secs=HOUR), fund=500, asset=ASSET)
+    b = root.delegate(KeyPair.from_seed(b"b"), Policy(per_tx_max=100, per_window_max=100, window_secs=HOUR), fund=500, asset=ASSET, salt=1)
+    a.transfer(OUTSIDE, ASSET, 100)  # the root is now at its cap
+    with pytest.raises(PolicyViolation):
+        b.transfer(OUTSIDE, ASSET, 50)  # b's own policy allows it; the root refuses
+    assert b.signer.window.spent(L.now, HOUR) == 0 == b.account.window.spent(L.now, HOUR)
+    with pytest.raises(Exception):
+        b.transfer(OUTSIDE, ASSET, 1_000)  # insufficient funds path, same rollback
+    assert b.signer.window.spent(L.now, HOUR) == 0

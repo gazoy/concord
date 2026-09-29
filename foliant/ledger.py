@@ -130,7 +130,10 @@ class Ledger:
         chain = self.lineage(acct)
         for a in chain:
             spent = a.window.spent(self.now, a.policy.window_secs)
-            a.policy.check(amount=amount, payee=payee, now=self.now, spent_in_window=spent, escalated=escalated)
+            # an escalation co-signature lifts per_tx_max only for the account whose
+            # policy names that co-signer; ancestors' caps are never lifted from below
+            a.policy.check(amount=amount, payee=payee, now=self.now, spent_in_window=spent,
+                           escalated=escalated and a is acct)
         for a in chain:
             a.window.record(self.now, amount)
 
@@ -171,7 +174,12 @@ class Ledger:
 
     # value-moving ops: policy check via acct.authorise before any transfer
 
+    def _require_funds(self, address: str, asset: str, amount: int) -> None:
+        if self.balance(address, asset) < amount:
+            raise InsufficientFunds(f"{address} has {self.balance(address, asset)} {asset}, needs {amount}")
+
     def _op_transfer(self, acct: AgentAccount, b: dict, escalated: bool) -> dict:
+        self._require_funds(acct.address, b["asset"], b["amount"])  # validate before any window is recorded
         self._authorise(acct, amount=b["amount"], payee=b["to"], escalated=escalated)
         self._move(Transfer(acct.address, b["to"], b["asset"], b["amount"]))
         return {"ok": True}
@@ -179,10 +187,11 @@ class Ledger:
     def _op_open_channel(self, acct: AgentAccount, b: dict, escalated: bool) -> dict:
         # the deposit is committed spend: the policy sees it at open, and the
         # signer sees each off-chain update; both bound the same money
-        self._authorise(acct, amount=b["deposit"], payee=b["payee"], escalated=escalated)
         cid = Channel.make_id(acct.id, b["payee"], b["salt"])
         if cid in self.channels:
             raise InvalidUpdate("channel exists")
+        self._require_funds(acct.address, b["asset"], b["deposit"])
+        self._authorise(acct, amount=b["deposit"], payee=b["payee"], escalated=escalated)
         ch = Channel(cid, acct.id, b["payee"], b["asset"], b["deposit"], b["timeout_secs"])
         self._move(Transfer(acct.address, ch.escrow, b["asset"], b["deposit"]))
         self.channels[cid] = ch
@@ -205,6 +214,10 @@ class Ledger:
 
     def _op_join_pool(self, acct: AgentAccount, b: dict, escalated: bool) -> dict:
         pool = self._pool(b["pool_id"])
+        active = acct.id in pool.members and not pool.members[acct.id].exited
+        if active or b["deposit"] <= 0:
+            raise InvalidUpdate("already a member" if active else "deposit must be positive")
+        self._require_funds(acct.address, pool.asset, b["deposit"])
         self._authorise(acct, amount=b["deposit"], payee=pool.coordinator, escalated=escalated)
         pool.join(acct.id, b["deposit"])
         self._move(Transfer(acct.address, pool.escrow, pool.asset, b["deposit"]))

@@ -35,13 +35,20 @@ class Agent:
         """Sign and apply an envelope. Value-moving ops pass `spend`/`payee_addr` so the
         signer runs the same policy check the ledger will run."""
         body = {"account": self.account.id, "nonce": self.account.nonce, "op": op, **params}
+        snapshot = list(self.signer.window.entries)
         if spend or payee_addr:
             env = self.signer.sign_payment(payee=payee_addr, amount=spend, now=self.ledger.now, body=body,
                                            escalated=escalate_with is not None)
         else:
             env = self.signer.sign_plain(body)
         esc = sign(escalate_with, env.body) if escalate_with else None
-        return self.ledger.apply(env, esc)
+        try:
+            return self.ledger.apply(env, esc)
+        except Exception:
+            # the ledger refused (an ancestor's policy, funds, a duplicate): the signer's
+            # window must not keep a spend that never happened, or it diverges from the ledger
+            self.signer.window.entries = snapshot
+            raise
 
     # --- the tree -----------------------------------------------------------
 
