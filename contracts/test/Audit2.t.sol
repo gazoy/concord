@@ -631,4 +631,266 @@ contract Audit2Test is Test {
         ch.finalizeClose(id);
         assertEq(acc.balanceOf(root, address(usdc)), 10_000);
     }
+
+    // =========================================================================== VERIFY-2 (commit d15bce8)
+
+    function _psigE(uint256 key, bytes32 pool, bytes32 account, uint64 epoch, uint64 seq, uint256 balance) internal view returns (bytes memory) {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, pools.updateDigest(pool, account, epoch, seq, balance));
+        return abi.encodePacked(r, s, v);
+    }
+
+    // VERIFY-2 balance ordering (channels): the same balance cannot be applied twice, a lower balance
+    // with a higher seq is stale, a seq that goes backwards with a higher balance applies (seq is
+    // bookkeeping only), beginClose with a stale signed update still sets closingAt, settling exactly
+    // the deposit then closing takes the remaining == 0 path without touching AgentAccounts.
+    function test_V2_channel_balance_ordering() public {
+        bytes32 id = _open(1000, 60, 0);
+        bytes memory u5_300 = _csig(signerKey, id, root, 5, 300);
+        bytes memory u9_300 = _csig(signerKey, id, root, 9, 300);
+        bytes memory u9_200 = _csig(signerKey, id, root, 9, 200);
+        bytes memory u2_1000 = _csig(signerKey, id, root, 2, 1000);
+        ch.settle(id, 5, 300, u5_300);
+        vm.expectRevert(PaymentChannels.StaleUpdate.selector);
+        ch.settle(id, 5, 300, u5_300);              // same balance twice
+        vm.expectRevert(PaymentChannels.StaleUpdate.selector);
+        ch.settle(id, 9, 300, u9_300);              // same balance, higher seq
+        vm.expectRevert(PaymentChannels.StaleUpdate.selector);
+        ch.settle(id, 9, 200, u9_200);              // lower balance, higher seq
+        // payer's seq jump at the settled balance no longer blocks anything and still opens the window
+        bytes memory jump = _csig(signerKey, id, root, type(uint64).max, 300);
+        vm.prank(signer);
+        ch.beginClose(id, type(uint64).max, 300, jump);
+        assertEq(ch.get(id).closingAt, uint64(block.timestamp) + 60, "closingAt not set on stale signed close");
+        assertEq(ch.get(id).paid, 300);
+        // a lower seq with the full balance applies: remaining becomes 0
+        ch.settle(id, 2, 1000, u2_1000);
+        assertEq(usdc.balanceOf(payee), 1000);
+        vm.warp(block.timestamp + 60);
+        uint256 accBefore = usdc.balanceOf(address(acc));
+        vm.prank(signer);
+        vm.expectEmit(true, false, false, true);
+        emit PaymentChannels.Closed(id, 0);
+        ch.finalizeClose(id);
+        assertEq(usdc.balanceOf(address(acc)), accBefore);
+        assertEq(usdc.balanceOf(address(ch)), 0);
+        assertTrue(ch.get(id).closed);
+    }
+
+    // VERIFY-2 balance ordering (pools): one signed balance pays the coordinator once across any number
+    // of batches, beginExit and contestExit; equal or lower balances are skipped / StaleUpdate; the
+    // out-of-range check is still reached on the gated path.
+    function test_V2_pool_balance_ordering_no_double_pay() public {
+        _join(pid, root, signer, 500);
+        Pools.Update memory a = _pupd(signerKey, pid, root, 1, 200);
+        Pools.Update memory b = _pupd(signerKey, pid, root, 7, 200);   // same balance, other seq
+        Pools.Update memory c = _pupd(signerKey, pid, root, 8, 150);   // lower balance, higher seq
+        Pools.Update memory d = _pupd(signerKey, pid, root, 3, 501);   // over deposit
+        Pools.Update[] memory batch = new Pools.Update[](3);
+        batch[0] = a; batch[1] = b; batch[2] = c;
+        assertEq(pools.settle(pid, batch), 200);
+        assertEq(pools.settle(pid, batch), 0);                          // second batch: all stale
+        assertEq(usdc.balanceOf(coordinator), 200);
+        batch = new Pools.Update[](1);
+        batch[0] = d;
+        vm.expectRevert(abi.encodeWithSelector(Pools.BadUpdate.selector, "balance out of range"));
+        pools.settle(pid, batch);
+        // beginExit with the already-settled balance: no payout, window opens
+        vm.prank(signer);
+        pools.beginExit(pid, root, 7, 200, b.sig);
+        assertEq(usdc.balanceOf(coordinator), 200);
+        assertTrue(pools.claimOf(pid, root).exitAt != 0);
+        vm.expectRevert(Pools.StaleUpdate.selector);
+        pools.contestExit(pid, a);
+        vm.expectRevert(Pools.StaleUpdate.selector);
+        pools.contestExit(pid, c);
+        Pools.Update memory e = _pupd(signerKey, pid, root, 2, 350);   // lower seq, higher balance: applies
+        pools.contestExit(pid, e);
+        assertEq(usdc.balanceOf(coordinator), 350);
+        assertEq(pools.claimOf(pid, root).seq, 2);
+    }
+
+    // VERIFY-2 epoch: first join is epoch 1 (default struct 0 + 1); every rejoin increments; an
+    // epoch-N signature is Unauthorized on epoch N+1 whatever its balance; between finalizeExit and
+    // rejoin nothing applies (settle skips, beginExit/contestExit NotMember); epoch is never reset.
+    function test_V2_epoch_lifecycle() public {
+        assertEq(pools.claimOf(pid, root).epoch, 0);
+        _join(pid, root, signer, 500);
+        assertEq(pools.claimOf(pid, root).epoch, 1);
+        bytes memory e1 = _psigE(signerKey, pid, root, 1, 5, 400);
+        bytes memory e0 = _psigE(signerKey, pid, root, 0, 5, 400);
+        Pools.Update[] memory b = new Pools.Update[](1);
+        b[0] = Pools.Update(root, 5, 400, e0);
+        vm.expectRevert(Pools.Unauthorized.selector);           // epoch 0 never valid
+        pools.settle(pid, b);
+        b[0] = Pools.Update(root, 5, 400, e1);
+        assertEq(pools.settle(pid, b), 400);
+        vm.prank(signer);
+        pools.beginExit(pid, root, 0, 0, "");
+        vm.warp(block.timestamp + 60);
+        vm.prank(signer);
+        pools.finalizeExit(pid, root);
+        // exited, not yet rejoined: the epoch-1 update is dead on every path
+        assertEq(pools.settle(pid, b), 0);
+        vm.expectRevert(Pools.NotMember.selector);
+        pools.contestExit(pid, b[0]);
+        vm.prank(signer);
+        vm.expectRevert(Pools.NotMember.selector);
+        pools.beginExit(pid, root, 5, 400, e1);
+        assertEq(pools.claimOf(pid, root).epoch, 1, "epoch reset on exit");
+        // rejoin with a deposit that would have fitted the old balance
+        _join(pid, root, signer, 500);
+        assertEq(pools.claimOf(pid, root).epoch, 2);
+        assertEq(pools.claimOf(pid, root).paid, 0);
+        vm.expectRevert(Pools.Unauthorized.selector);
+        pools.settle(pid, b);                                    // FIXED A2-2
+        vm.expectRevert(Pools.Unauthorized.selector);
+        pools.beginExit(pid, root, 5, 400, e1);
+        vm.prank(signer);
+        vm.expectRevert(Pools.Unauthorized.selector);
+        pools.beginExit(pid, root, 5, 400, e1);
+        // an epoch-2 update from the same key does apply, once
+        b[0] = Pools.Update(root, 1, 100, _psigE(signerKey, pid, root, 2, 1, 100));
+        assertEq(pools.settle(pid, b), 100);
+        assertEq(pools.settle(pid, b), 0);
+        // and a third membership is epoch 3
+        vm.prank(signer);
+        pools.beginExit(pid, root, 0, 0, "");
+        vm.warp(block.timestamp + 60);
+        vm.prank(signer);
+        pools.finalizeExit(pid, root);
+        _join(pid, root, signer, 100);
+        assertEq(pools.claimOf(pid, root).epoch, 3);
+        assertEq(usdc.balanceOf(coordinator), 500);
+    }
+
+    // VERIFY-2 epoch is bound to the (pool, account) pair: the same account's epoch-1 update on
+    // pool A is not valid on pool B where it is also at epoch 1.
+    function test_V2_epoch_is_per_pool() public {
+        vm.prank(coordinator);
+        bytes32 pid2 = pools.create(address(usdc), 60, 2);
+        _join(pid, root, signer, 500);
+        _join(pid2, root, signer, 500);
+        Pools.Update[] memory b = new Pools.Update[](1);
+        b[0] = Pools.Update(root, 1, 100, _psigE(signerKey, pid, root, 1, 1, 100));
+        vm.expectRevert(Pools.Unauthorized.selector);
+        pools.settle(pid2, b);
+        assertEq(pools.settle(pid, b), 100);
+    }
+
+    // VERIFY-2 snapshotted signers: after a rotation, the opening signer's updates still settle (FIXED
+    // A2-4) and the new signer's do not; close/exit authority is the CURRENT signer, so the new signer
+    // closes with an empty update (and must not pass its own signed one); the pool claim behaves the
+    // same; a rejoin after rotation snapshots the new signer.
+    function test_V2_snapshot_signers_vs_current_authority() public {
+        bytes32 id = _open(1000, 60, 0);
+        _join(pid, root, signer, 500);
+        bytes memory oldU = _csig(signerKey, id, root, 1, 400);
+        Pools.Update memory oldP = _pupd(signerKey, pid, root, 1, 200);
+        vm.prank(owner);
+        acc.rotateSigner(root, other);
+        assertEq(ch.get(id).signer, signer);
+        assertEq(pools.claimOf(pid, root).signer, signer);
+        // updates: old signer valid, new signer invalid
+        bytes memory newU = _csig(otherKey, id, root, 2, 500);
+        vm.expectRevert(PaymentChannels.Unauthorized.selector);
+        ch.settle(id, 2, 500, newU);
+        ch.settle(id, 1, 400, oldU);
+        Pools.Update memory newP = _pupd(otherKey, pid, root, 2, 300);
+        Pools.Update[] memory b = new Pools.Update[](1);
+        b[0] = newP;
+        vm.expectRevert(Pools.Unauthorized.selector);
+        pools.settle(pid, b);
+        b[0] = oldP;
+        assertEq(pools.settle(pid, b), 200);
+        // authority: old signer cannot close/exit, new signer can, but only with an empty update
+        vm.prank(signer);
+        vm.expectRevert(PaymentChannels.Unauthorized.selector);
+        ch.beginClose(id, 0, 0, "");
+        vm.prank(other);
+        vm.expectRevert(PaymentChannels.Unauthorized.selector);
+        ch.beginClose(id, 2, 500, newU);
+        vm.prank(other);
+        ch.beginClose(id, 0, 0, "");
+        vm.prank(signer);
+        vm.expectRevert(Pools.Unauthorized.selector);
+        pools.beginExit(pid, root, 0, 0, "");
+        vm.prank(other);
+        pools.beginExit(pid, root, 0, 0, "");
+        // the rotated-away key can still move the committed remainder to the payee/coordinator during
+        // the window: that value was authorised at open/join, so this is the documented design
+        bytes memory drain = _csig(signerKey, id, root, 3, 1000);
+        ch.settle(id, 3, 1000, drain);
+        Pools.Update memory drainP = _pupd(signerKey, pid, root, 3, 500);
+        pools.contestExit(pid, drainP);
+        vm.warp(block.timestamp + 60);
+        vm.prank(other);
+        ch.finalizeClose(id);
+        vm.prank(other);
+        pools.finalizeExit(pid, root);
+        assertEq(usdc.balanceOf(payee), 1000);
+        assertEq(usdc.balanceOf(coordinator), 500);
+        assertEq(acc.balanceOf(root, address(usdc)), 8500);
+        // rejoin after the rotation: the claim now snapshots the new signer at epoch 2
+        vm.prank(other);
+        pools.join(pid, root, 100, "", 0);
+        Pools.Claim memory c = pools.claimOf(pid, root);
+        assertEq(c.signer, other);
+        assertEq(c.epoch, 2);
+        b[0] = Pools.Update(root, 1, 50, _psigE(signerKey, pid, root, 2, 1, 50)); // old key, right epoch
+        vm.expectRevert(Pools.Unauthorized.selector);
+        pools.settle(pid, b);
+        b[0] = Pools.Update(root, 1, 50, _psigE(otherKey, pid, root, 2, 1, 50));
+        assertEq(pools.settle(pid, b), 50);
+    }
+
+    // VERIFY-2 MAX_TIMEOUT boundary and the arithmetic it protects: 30 days accepted, 30 days + 1
+    // refused, and closingAt/exitAt are computed without overflow at the bound.
+    function test_V2_max_timeout_boundary() public {
+        assertEq(ch.MAX_TIMEOUT(), 30 days);
+        assertEq(pools.MAX_TIMEOUT(), 30 days);
+        vm.prank(signer);
+        vm.expectRevert(abi.encodeWithSelector(PaymentChannels.BadUpdate.selector, "timeout out of range"));
+        ch.open(root, payee, address(usdc), 100, 30 days + 1, 3, "", 0);
+        bytes32 id = _open(100, 30 days, 4);
+        vm.prank(signer);
+        ch.beginClose(id, 0, 0, "");
+        assertEq(ch.get(id).closingAt, uint64(block.timestamp) + 30 days);
+        vm.prank(coordinator);
+        bytes32 p = pools.create(address(usdc), 30 days, 6);
+        _join(p, root, signer, 100);
+        vm.prank(signer);
+        pools.beginExit(p, root, 0, 0, "");
+        assertEq(pools.claimOf(p, root).exitAt, uint64(block.timestamp) + 30 days);
+    }
+
+    // VERIFY-2 module addresses as payee: refused at open, at transfer and at commit (FIXED A2-5); an
+    // ordinary contract payee is still fine.
+    function test_V2_module_payee_refused() public {
+        vm.prank(signer);
+        vm.expectRevert(AgentAccounts.BadPayee.selector);
+        ch.open(root, address(ch), address(usdc), 100, 60, 7, "", 0);
+        vm.prank(signer);
+        vm.expectRevert(AgentAccounts.BadPayee.selector);
+        ch.open(root, address(pools), address(usdc), 100, 60, 7, "", 0);
+        vm.prank(signer);
+        vm.expectRevert(AgentAccounts.BadPayee.selector);
+        acc.transfer(root, address(usdc), address(pools), 100, "", 0);
+        vm.prank(signer);
+        ch.open(root, address(usdc), address(usdc), 100, 60, 8, "", 0); // any other contract is allowed
+    }
+
+    // VERIFY-2 storage/ABI: the new fields round-trip through the getters and the constructor-style
+    // positional Claim literal in join lands each field in the right slot.
+    function test_V2_new_fields_round_trip() public {
+        bytes32 id = _open(123, 45, 9);
+        PaymentChannels.Channel memory c = ch.get(id);
+        assertEq(c.payer, root); assertEq(c.signer, signer); assertEq(c.payee, payee);
+        assertEq(c.token, address(usdc)); assertEq(c.deposit, 123); assertEq(c.paid, 0);
+        assertEq(c.seq, 0); assertEq(c.timeoutSecs, 45); assertEq(c.closingAt, 0);
+        assertFalse(c.closed); assertTrue(c.exists);
+        _join(pid, root, signer, 77);
+        Pools.Claim memory k = pools.claimOf(pid, root);
+        assertEq(k.deposit, 77); assertEq(k.paid, 0); assertEq(k.seq, 0); assertEq(k.exitAt, 0);
+        assertEq(k.epoch, 1); assertEq(k.signer, signer); assertFalse(k.exited); assertTrue(k.exists);
+    }
 }

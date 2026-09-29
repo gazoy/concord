@@ -49,7 +49,7 @@ contract PaymentChannels is ReentrancyGuard, EIP712 {
     AgentAccounts public immutable accounts;
     mapping(bytes32 => Channel) private _channels;
 
-    event Opened(bytes32 indexed id, bytes32 indexed payer, address indexed payee, address token, uint256 deposit, uint64 timeoutSecs);
+    event Opened(bytes32 indexed id, bytes32 indexed payer, address indexed payee, address token, uint256 deposit, uint64 timeoutSecs, address signer);
     event Settled(bytes32 indexed id, uint64 seq, uint256 balance, uint256 paidOut);
     event Closing(bytes32 indexed id, uint64 closingAt);
     event Closed(bytes32 indexed id, uint256 refunded);
@@ -100,7 +100,7 @@ contract PaymentChannels is ReentrancyGuard, EIP712 {
         c.deposit = received;
         c.timeoutSecs = timeoutSecs;
         c.exists = true;
-        emit Opened(id, payer, payee, token, received, timeoutSecs);
+        emit Opened(id, payer, payee, token, received, timeoutSecs, msg.sender);
     }
 
     /// @notice Anyone submits a payer-signed update; pays the payee the increase. Allowed until closed.

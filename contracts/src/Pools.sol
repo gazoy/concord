@@ -23,7 +23,8 @@ import {AgentAccounts} from "./AgentAccounts.sol";
 /// signer the account had when it joined (snapshotted; AUDIT-2 A2-4) and carry the claim's
 /// epoch, which increments on every join, so updates from an earlier membership cannot replay
 /// (A2-2); updates are ordered by balance, not the member-chosen seq (A2-1); exit authority is
-/// the account's current signer; timeouts are bounded by MAX_TIMEOUT (A2-3); the coordinator's
+/// the account's current signer — so a rotation ends payment through an existing claim; the new
+/// signer exits and rejoins; timeouts are bounded by MAX_TIMEOUT (A2-3); the coordinator's
 /// liveness bond is not ported (its forfeiture is a governance action the reference also leaves
 /// out of scope).
 contract Pools is ReentrancyGuard, EIP712 {
@@ -63,7 +64,7 @@ contract Pools is ReentrancyGuard, EIP712 {
     mapping(bytes32 => mapping(bytes32 => Claim)) private _claims; // pool => account => claim
 
     event Created(bytes32 indexed id, address indexed coordinator, address token, uint64 timeoutSecs);
-    event Joined(bytes32 indexed id, bytes32 indexed account, uint256 deposit);
+    event Joined(bytes32 indexed id, bytes32 indexed account, uint256 deposit, uint64 epoch, address signer);
     event Applied(bytes32 indexed id, bytes32 indexed account, uint64 seq, uint256 balance, uint256 paidOut);
     event Settled(bytes32 indexed id, uint256 total);
     event Exiting(bytes32 indexed id, bytes32 indexed account, uint64 exitAt);
@@ -112,7 +113,7 @@ contract Pools is ReentrancyGuard, EIP712 {
         uint256 received = IERC20(p.token).balanceOf(address(this)) - before;
         uint64 epoch = c.epoch + 1;
         _claims[id][account] = Claim(received, 0, 0, 0, epoch, msg.sender, false, true);
-        emit Joined(id, account, received);
+        emit Joined(id, account, received, epoch, msg.sender);
     }
 
     /// @notice Anyone settles any subset of members with their latest payer-signed updates, paying the

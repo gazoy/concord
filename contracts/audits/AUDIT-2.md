@@ -340,3 +340,103 @@ loss path runs from one counterparty of a channel or pool to the other.
 | A2-8 Info | Documented. |
 
 Reproduction tests in `test/Audit2.t.sol` now pass unchanged (they asserted the desired behaviour); the pre-existing tests that encoded seq ordering, rotation voiding updates and epoch-less rejoin were updated to the fixed semantics. Suite: 94 Foundry tests, 37 Python tests, TypeScript client 7, ElizaOS plugin 4, LangChain 17 — all green.
+
+## Verification, round 2 (auditor, 29 Sep 2026, commit d15bce8)
+
+Method: re-read the diff and the full current text of `PaymentChannels.sol`, `Pools.sol` and the
+`_requirePayee` change in `AgentAccounts.sol`; re-read the changed reference (`channels.py`,
+`pools.py`, `accounts.py`, `agent.py`, `ledger.py`) and the two new reference tests; attacked each
+fix by hand along the lines the author asked about; appended 8 tests (`test_V2_*`, marked
+`// VERIFY-2`) to `test/Audit2.t.sol`. `forge test --match-contract Audit2Test`: 30 of 30 pass (the
+6 round-1 reproductions now pass as fixed-behaviour assertions, unchanged). Whole Foundry suite: 102
+of 102. Reference `tests/test_channels.py` + `tests/test_pools.py`: 12 of 12. `src/` untouched.
+
+### Status
+
+| Finding | Status | Evidence |
+| --- | --- | --- |
+| A2-1 High, seq ordering | **Closed** | Every path that reaches `_apply` is gated on `balance > paid` first: `settle` (revert `StaleUpdate`), `beginClose` (skip), pool `settle` (skip), `beginExit` (skip), `contestExit` (revert). `_apply` itself keeps only `balance <= deposit`; since it is `internal` with exactly those five callers, dropping the decrease check from it is sound. Same balance twice, same balance with a higher seq, and a lower balance with a higher seq are all stale; a *lower* seq with a higher balance applies (seq is bookkeeping and may go backwards on-chain). A payer's seq jump at the settled balance neither pays nor blocks, and `beginClose` with such a stale signed update still opens the window (`closingAt` set). One signed balance pays the coordinator exactly once across any number of batches, `beginExit` and `contestExit`. Settling exactly `deposit` and closing takes `remaining == 0` without calling `AgentAccounts` and emits `Closed(id, 0)`. (`test_V2_channel_balance_ordering`, `test_V2_pool_balance_ordering_no_double_pay`.) |
+| A2-2 High, rejoin replay | **Closed** | `join` reads `c.epoch` from the (possibly default) struct before overwriting it, so the first membership is epoch 1 and each rejoin is `+1`; the whole struct is rewritten with the computed epoch and nothing else ever writes it, so it is never reset (it survives exit: 1 → exited → 2 → exited → 3). The epoch is in the typed data and verified against the claim's, so an epoch-N signature on epoch N+1 fails as `Unauthorized` on `settle`, `beginExit` and `contestExit` whatever its balance; epoch 0 is never valid. Between `finalizeExit` and rejoin nothing applies (`settle` skips on `exited`, `_active` reverts). The epoch is per `(pool, account)`: the same account's epoch-1 update on pool A is invalid on pool B at epoch 1 (pool id is in the digest). (`test_V2_epoch_lifecycle`, `test_V2_epoch_is_per_pool`.) |
+| A2-3 Medium, unbounded timeout | **Closed** | `MAX_TIMEOUT = 30 days` in both; `30 days` accepted, `30 days + 1` and `2^64-1` refused; `uint64(now) + 30 days` cannot overflow; `closingAt`/`exitAt` correct at the bound (`test_V2_max_timeout_boundary`, `test_verify_timeout_bounds`). |
+| A2-4 Medium, rotation voids updates | **Closed in the contracts; see divergence D-1** | `Channel.signer` / `Claim.signer` are set to `msg.sender` immediately after `commit` has checked it is the account's signer, and are the only key `_verify` accepts; `beginClose`/`finalizeClose`/`beginExit`/`finalizeExit` check `accounts.signerOf` (current). After a rotation the opening signer's updates settle, the new signer's do not, the old signer cannot close/exit, the new signer can; a rejoin after rotation snapshots the new signer at the next epoch (`test_V2_snapshot_signers_vs_current_authority`). |
+| A2-5 Low, module payee | **Closed** | `_requirePayee` rejects `isModule[payee]`; `open` with payee `ch` or `pools` and `transfer` to a module revert `BadPayee`; other contract payees still allowed (`test_V2_module_payee_refused`). |
+| A2-6 Info, no ERC-1271 | Documented | Unchanged. |
+| A2-7 Info, windows bound only contestExit | Open (deferred to mainnet by author) | Unchanged; `test_verify_settle_after_exit_window` still documents it. |
+| A2-8 Info, fee-on-transfer | Documented | Unchanged. |
+
+### Questions the author asked, answered
+
+- *Any sequence where the payee applies an update the payer did not sign for this channel/claim,
+  or applies the same balance twice?* No. The digest binds channel id (which binds payer, payee,
+  salt) or pool id + account + epoch, and the balance gate is strict on every path. Verified by
+  the round-1 domain/shape tests plus `test_V2_*`.
+- *Any path to `_apply` without the gate?* None: five call sites, all gated (listed above).
+- *Rotated-away signer draining the remainder to the payee/coordinator.* Confirmed possible during
+  the close/exit window (the test does exactly that: 1000 to the payee, 500 to the coordinator
+  after rotation). I agree it is the right design: that value was authorised as a spend to that
+  payee at open/join and recorded in every ancestor's window then; the owner's exposure after a
+  key compromise is bounded by what was already committed, and the remedy is to rotate and close.
+  The alternative (rotation voids updates) is A2-4, which is worse for the honest payee.
+- *Struct packing, getters, events.* `Channel` grows from 6 to 7 slots (`signer` takes its own
+  slot; `seq|timeoutSecs|closingAt|closed|exists` still pack), `Claim` from 3 to 4
+  (`seq|exitAt|epoch` pack in one, `signer|exited|exists` in the next). The positional literal in
+  `join` matches the field order; `get`/`claimOf` round-trip every field
+  (`test_V2_new_fields_round_trip`). The ABI of `get`, `claimOf` and `updateDigest` (pools, now 5
+  args) changed, so any client/indexer must be regenerated. Events are unchanged: `Opened` does not
+  carry `signer` and `Joined` does not carry `epoch` (see A2-9).
+
+### Reference cross-check
+
+Agree: staleness (`balance <= settled` is stale, on `settle`/`begin_close`/`begin_exit` as a skip
+and on `contest_exit`/channel `settle` as an error), `seq` retained as bookkeeping and written on
+apply, epoch starts at 1 and increments per join, epoch is not reset by exit, exit-then-rejoin
+starts from `paid 0`, `finalize_exit` in the agent clears its local latest/seq/balance memory. The
+error class differs harmlessly: Python raises `InvalidUpdate("update epoch ...")` after a good
+signature, Solidity fails the signature (`Unauthorized`) because the epoch is inside the digest.
+
+Divergence D-1 (`ledger.py` 209, 301, 336-351; `pools.py` `settle`/`begin_exit`/`contest_exit`
+signatures): the reference still verifies channel and pool updates against `acct.signer`, the
+account's **current** signer; `Channel` and `PoolClaim` have no snapshotted signer. So after a
+rotation the reference accepts the new signer's updates and rejects the old signer's, and the
+contracts do the opposite. The contract headers declare the snapshot as a deliberate difference,
+so this is not a defect in either, but it is a semantic divergence that a client written against
+the reference will get wrong on-chain (it would keep signing with the rotated-in key and every
+update would be `Unauthorized`; and the reference's A2-4 exposure remains). Recommend porting the
+snapshot to the reference (`Channel.signer`, `PoolClaim.signer`, set at open/join) so the two agree,
+and closing the reference's A2-4 at the same time.
+
+### New findings
+
+**A2-9 Low: a rotated-in signer cannot pay through existing channels or claims, and nothing on-chain
+tells a client which key an update must use.** Lines: `PaymentChannels.sol` `_verify`
+(`rec != c.signer`), `Pools.sol` `_verify`; events `Opened`, `Joined`. Consequence of the A2-4 fix:
+after a rotation the account's new signer can only close/exit; to keep paying, the payer must close
+and reopen (or exit and rejoin, which bumps the epoch). A client that, as the round-1 tests did,
+always passes its latest signed update to `beginClose`/`beginExit` will revert `Unauthorized` with
+the new key and must pass an empty signature. The snapshot signer is readable via `get`/`claimOf`
+but not emitted, and `Joined` does not emit the epoch the counterparty must sign against. Fix:
+emit `signer` in `Opened` and `signer, epoch` in `Joined`; state in the header and client docs
+that a rotation ends payment on open channels/claims. No loss of value.
+
+Nothing else. Nothing above Low.
+
+### Verdict
+
+A2-1 through A2-5 are closed in the contracts, with the reasoning and edge cases above verified by
+test. The balance-ordering change is small and every apply path is gated; the epoch is monotone,
+per pool and per account, and cannot be reset; the snapshot signer and current-signer authority are
+applied consistently in both modules. The reference agrees on ordering and epochs; the one
+divergence (D-1, current vs snapshotted signer) is declared and should be reconciled in the
+reference before the clients are exercised against both.
+
+PaymentChannels and Pools are fit for a Fuji testnet deployment at commit d15bce8. Before mainnet:
+resolve A2-7 (deadline in `settle` or drop `contestExit`), A2-9 (events and client docs), D-1 in the
+reference, keep A2-6/A2-8 documented, and re-run this file plus a malicious-payer fuzz over random
+`(seq, balance)` sequences asserting the payee can always settle its highest signed balance until
+`closed`.
+
+### Resolution of round-2 items (author)
+
+- D-1: the reference now snapshots the signer too (`Channel.signer`, `PoolClaim.signer`, set at open/join in `ledger.py`; verification uses it). Python and Solidity agree after rotation.
+- A2-9: `Opened` now carries the snapshot signer; `Joined` carries epoch and signer. Headers state that a rotation ends payment through existing channels/claims.
+- Carried to the mainnet list: A2-7, the malicious-payer fuzz, A2-6/A2-8 documentation.

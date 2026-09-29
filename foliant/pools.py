@@ -30,6 +30,7 @@ class PoolClaim:
     exit_at: Optional[int] = None
     exited: bool = False
     epoch: int = 1  # increments on each join; signed updates must carry it (AUDIT-2 A2-2)
+    signer: Optional[PublicKey] = None  # the member's signer at join: the key whose updates count (A2-4)
 
 
 @dataclass
@@ -54,13 +55,13 @@ class Pool:
     def bond_escrow(self) -> str:
         return f"bond:{self.id}"
 
-    def join(self, account_id: str, deposit: int) -> None:
+    def join(self, account_id: str, deposit: int, signer: Optional[PublicKey] = None) -> None:
         if account_id in self.members and not self.members[account_id].exited:
             raise InvalidUpdate("already a member")
         if deposit <= 0:
             raise InvalidUpdate("deposit must be positive")
         prev = self.members.get(account_id)
-        self.members[account_id] = PoolClaim(account_id, deposit, epoch=(prev.epoch + 1) if prev else 1)
+        self.members[account_id] = PoolClaim(account_id, deposit, epoch=(prev.epoch + 1) if prev else 1, signer=signer)
 
     def _claim(self, account_id: str) -> PoolClaim:
         c = self.members.get(account_id)
@@ -70,7 +71,7 @@ class Pool:
 
     def _verify(self, update: Signed, c: PoolClaim, account_id: str, signer: PublicKey) -> tuple[int, int]:
         """verify_update plus the claim's epoch, so an update from an earlier membership cannot replay."""
-        seq, balance = verify_update(update, kind="pool", obj_id=self.id, account_id=account_id, signer=signer)
+        seq, balance = verify_update(update, kind="pool", obj_id=self.id, account_id=account_id, signer=c.signer or signer)
         if update.body.get("epoch") != c.epoch:
             raise InvalidUpdate(f"update epoch {update.body.get('epoch')} != claim epoch {c.epoch}")
         return seq, balance

@@ -196,7 +196,7 @@ class Ledger:
             raise InvalidUpdate("channel exists")
         self._require_funds(acct.address, b["asset"], b["deposit"])
         self._authorise(acct, amount=b["deposit"], payee=b["payee"], escalated=escalated)
-        ch = Channel(cid, acct.id, b["payee"], b["asset"], b["deposit"], b["timeout_secs"])
+        ch = Channel(cid, acct.id, b["payee"], b["asset"], b["deposit"], b["timeout_secs"], signer=acct.signer)
         self._move(Transfer(acct.address, ch.escrow, b["asset"], b["deposit"]))
         self.channels[cid] = ch
         return {"channel_id": cid}
@@ -206,7 +206,7 @@ class Ledger:
         if ch.payer_account != acct.id:
             raise Unauthorized("not the channel's payer")
         latest = Signed.from_dict(b["latest"]) if b.get("latest") else None
-        self._moves(ch.begin_close(self.now, latest, account_id=acct.id, signer=acct.signer))
+        self._moves(ch.begin_close(self.now, latest, account_id=acct.id, signer=ch.signer or acct.signer))
         return {"closing_at": ch.closing_at}
 
     def _op_finalize_close(self, acct: AgentAccount, b: dict, _: bool) -> dict:
@@ -223,7 +223,7 @@ class Ledger:
             raise InvalidUpdate("already a member" if active else "deposit must be positive")
         self._require_funds(acct.address, pool.asset, b["deposit"])
         self._authorise(acct, amount=b["deposit"], payee=pool.coordinator, escalated=escalated)
-        pool.join(acct.id, b["deposit"])
+        pool.join(acct.id, b["deposit"], signer=acct.signer)
         self._move(Transfer(acct.address, pool.escrow, pool.asset, b["deposit"]))
         return {"ok": True}
 
@@ -298,7 +298,7 @@ class Ledger:
         """Anyone may submit a payer-signed update; returns the amount paid out."""
         ch = self._channel(cid)
         acct = self._account(ch.payer_account)
-        effects = ch.settle(update, account_id=acct.id, signer=acct.signer)
+        effects = ch.settle(update, account_id=acct.id, signer=ch.signer or acct.signer)
         self._moves(effects)
         return sum(t.amount for t in effects)
 

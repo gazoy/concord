@@ -53,6 +53,7 @@ class Channel:
     seq: int = 0  # seq of the last update applied on-chain
     closing_at: Optional[int] = None
     closed: bool = False
+    signer: Optional[PublicKey] = None  # the payer's signer at open: the key whose updates count (AUDIT-2 A2-4)
     # streaming: a signed (rate, start) lets the payee claim rate*(now-start)
     stream: Optional[dict] = field(default=None)
 
