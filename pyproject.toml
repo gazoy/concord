@@ -18,8 +18,12 @@ Source = "https://github.com/gazoy/concord"
 [tool.setuptools]
 packages = ["foliant"]
 
+[tool.setuptools.package-data]
+foliant = ["abi/*.json"]
+
 [project.optional-dependencies]
 test = ["pytest>=8", "hypothesis>=6"]
+chain = ["web3>=7", "eth-account>=0.13"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

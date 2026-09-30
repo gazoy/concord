@@ -120,8 +120,8 @@ class PaymentGate:
             seq, balance = verify_update(update, kind=kind, obj_id=obj_id, account_id=acct.id, signer=acct.signer)
             key = f"{kind}:{obj_id}:{acct.id}"
             prev = self.latest.get(key)
-            last_seq, last_bal = (prev.body["seq"], prev.body["balance"]) if prev else (onchain_seq, onchain_bal)
-            if seq <= last_seq:
+            last_bal = prev.body["balance"] if prev else onchain_bal
+            if balance <= last_bal:  # ordered by balance, not seq (AUDIT-2 A2-1)
                 raise FoliantError("stale update")
             if balance > deposit:
                 raise FoliantError("update exceeds deposit")
