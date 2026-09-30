@@ -63,7 +63,9 @@ A session of N calls costs one open/join and one settle regardless of N.
 
 | Network | AgentAccounts | PaymentChannels | Pools |
 | --- | --- | --- | --- |
-| Fuji (43113) | _pending_ | _pending_ | _pending_ |
+| Fuji (43113) | [`0xDB6940FBD9Dcf8AAD1aBB521B4b6790D0b579c92`](https://testnet.snowtrace.io/address/0xDB6940FBD9Dcf8AAD1aBB521B4b6790D0b579c92) | [`0xa857d5EF74F63fd10BD786bf2d66EaA53736c976`](https://testnet.snowtrace.io/address/0xa857d5EF74F63fd10BD786bf2d66EaA53736c976) | [`0x26665c7Ad0a4272F87D1949745dD4B4743F53662`](https://testnet.snowtrace.io/address/0x26665c7Ad0a4272F87D1949745dD4B4743F53662) |
+
+Deployed 30 Sep 2026 at block 58893255; modules locked in the same block (deployer holds no further power).
 
 ## Not in this version
 

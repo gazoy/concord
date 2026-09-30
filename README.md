@@ -47,6 +47,10 @@ pytest                      # 34 tests incl. property-based invariants
 python sim/crosschain.py --quick   # cross-ledger budget-tree simulation, smoke run
 ```
 
+## On Avalanche Fuji
+
+The contracts are deployed on Avalanche Fuji (chain 43113): AgentAccounts [`0xDB6940FBD9Dcf8AAD1aBB521B4b6790D0b579c92`](https://testnet.snowtrace.io/address/0xDB6940FBD9Dcf8AAD1aBB521B4b6790D0b579c92), PaymentChannels [`0xa857d5EF74F63fd10BD786bf2d66EaA53736c976`](https://testnet.snowtrace.io/address/0xa857d5EF74F63fd10BD786bf2d66EaA53736c976), Pools [`0x26665c7Ad0a4272F87D1949745dD4B4743F53662`](https://testnet.snowtrace.io/address/0x26665c7Ad0a4272F87D1949745dD4B4743F53662). `ChainLedger.for_network("avalanche-fuji")` in `foliant.chain` targets them; `demo/serve_chain.py` runs the metered API against them. Audits: [`contracts/audits/`](contracts/audits/).
+
 ## Packages
 
 | Package | Registry | What it is |

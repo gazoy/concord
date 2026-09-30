@@ -97,6 +97,11 @@ X402_VERSION = 1
 NETWORKS = {43113: "avalanche-fuji", 43114: "avalanche", 31337: "anvil"}
 
 
+def deployments() -> dict:
+    """Known deployments of the contracts, by network name (foliant/abi/deployments.json)."""
+    return json.loads(resources.files("foliant").joinpath("abi/deployments.json").read_text())
+
+
 def _abi(name: str) -> dict:
     return json.loads(resources.files("foliant").joinpath(f"abi/{name}.json").read_text())
 
@@ -153,6 +158,11 @@ class ChainPolicy:
 
 
 class ChainLedger:
+    @classmethod
+    def for_network(cls, name: str = "avalanche-fuji", rpc_url: Optional[str] = None) -> "ChainLedger":
+        d = deployments()[name]
+        return cls(rpc_url or d["rpc"], d["accounts"], d["channels"], d["pools"])
+
     def __init__(self, rpc_url: str, accounts: str, channels: str, pools: str, w3: Optional[Web3] = None):
         self.w3 = w3 or Web3(Web3.HTTPProvider(rpc_url))
         self.accounts = self.w3.eth.contract(address=Web3.to_checksum_address(accounts), abi=_abi("AgentAccounts")["abi"])

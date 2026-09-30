@@ -1,0 +1,10 @@
+{
+  "avalanche-fuji": {
+    "chainId": 43113,
+    "rpc": "https://api.avax-test.network/ext/bc/C/rpc",
+    "accounts": "0xDB6940FBD9Dcf8AAD1aBB521B4b6790D0b579c92",
+    "channels": "0xa857d5EF74F63fd10BD786bf2d66EaA53736c976",
+    "pools": "0x26665c7Ad0a4272F87D1949745dD4B4743F53662",
+    "deployedBlock": 58893255
+  }
+}
