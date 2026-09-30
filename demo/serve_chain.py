@@ -6,9 +6,10 @@
     python demo/serve_chain.py           # http://127.0.0.1:8402
 
 Endpoints: POST /infer (x402, price per call in FOLIANT_PRICE, default 3 units); GET /chain (addresses,
-network, offer); POST /settle (provider settles everything outstanding). Agents talk to the chain
-directly for opening channels and joining the pool (see foliant.chain.ChainAgent); this server only
-verifies their off-chain updates and settles.
+network, offer); POST /settle (provider settles everything outstanding); POST /tap (testnet funding for a
+visitor's address, only when FOLIANT_TAP_KEY is set; see demo/tap.py). Agents talk to the chain directly
+for opening channels and joining the pool (see foliant.chain.ChainAgent); this server only verifies their
+off-chain updates and settles.
 """
 from __future__ import annotations
 
@@ -20,10 +21,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import uvicorn
+from web3 import Web3
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from foliant.chain import ChainGate, ChainLedger, ChainOffer, ChainPayment, PaymentRequired, _hex
+from demo.tap import TapError, tap_from_env
 
 
 def make_app() -> FastAPI:
@@ -54,6 +58,11 @@ def make_app() -> FastAPI:
 
     app = FastAPI(title="Foliant metered API (chain)", lifespan=lifespan)
     settle_key = env.get("FOLIANT_SETTLE_KEY")  # if set, POST /settle needs it in X-Settle-Key
+    tap = tap_from_env(L, env)
+    if tap:
+        if tap.address.lower() == provider.lower():
+            raise SystemExit("FOLIANT_TAP_KEY must be a wallet used by nothing else, not PROVIDER_KEY (nonce race)")
+        print("tap enabled from", tap.address, "balance", Web3.from_wei(tap.balance(), "ether"), "AVAX")
 
     @app.exception_handler(PaymentRequired)
     async def _h(_r, exc):
@@ -71,7 +80,21 @@ def make_app() -> FastAPI:
     def chain():
         return {"network": L.network, "chainId": L.chain_id, "contracts": {"accounts": L.accounts.address,
                 "channels": L.channels.address, "pools": L.pools.address}, "token": offer.token,
-                "provider": provider, "poolId": _hex(offer.pool_id), "price": offer.price_per_unit}
+                "provider": provider, "poolId": _hex(offer.pool_id), "price": offer.price_per_unit,
+                "tap": tap.status() if tap else None}
+
+    @app.post("/tap")
+    async def tap_endpoint(request: Request):
+        if tap is None:
+            return JSONResponse(status_code=404, content={"error": "no tap on this server"})
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return JSONResponse(status_code=400, content={"error": "JSON body {\"address\": \"0x...\"} required"})
+        try:  # give() blocks on the chain for a few seconds: keep it off the event loop (TAP-REVIEW T-4)
+            return await run_in_threadpool(tap.give, body.get("address") if isinstance(body, dict) else None)
+        except TapError as e:
+            return JSONResponse(status_code=e.status, content={"error": str(e)})
 
     @app.get("/health")
     def health():
