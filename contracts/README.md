@@ -40,7 +40,9 @@ Prints the three addresses. `--verify --etherscan-api-key $SNOWTRACE_KEY` verifi
 a delegated worker, a pool deposit, a worker channel settled by the provider, a recall) and prints the
 balances and windows; see its header for the environment variables.
 
-## Gas (Foundry, optimizer 200 runs)
+## Gas
+
+Measured on Fuji: see [docs/fuji-cost-report.md](../docs/fuji-cost-report.md). Local (Foundry, optimizer 200 runs):
 
 | Operation | Gas |
 | --- | ---: |
