@@ -7,7 +7,8 @@
 
 Endpoints: POST /infer (x402, price per call in FOLIANT_PRICE, default 3 units); GET /chain (addresses,
 network, offer); POST /settle (provider settles everything outstanding); POST /tap (testnet funding for a
-visitor's address, only when FOLIANT_TAP_KEY is set; see demo/tap.py). Agents talk to the chain directly
+visitor's address, only when FOLIANT_TAP_KEY is set; per-client limit keyed by the caller's IP, taken from
+X-Forwarded-For only when FOLIANT_TRUST_PROXY=1; see demo/tap.py). Agents talk to the chain directly
 for opening channels and joining the pool (see foliant.chain.ChainAgent); this server only verifies their
 off-chain updates and settles.
 """
@@ -59,10 +60,21 @@ def make_app() -> FastAPI:
     app = FastAPI(title="Foliant metered API (chain)", lifespan=lifespan)
     settle_key = env.get("FOLIANT_SETTLE_KEY")  # if set, POST /settle needs it in X-Settle-Key
     tap = tap_from_env(L, env)
+    trust_proxy = env.get("FOLIANT_TRUST_PROXY") == "1"  # behind a reverse proxy that sets X-Forwarded-For
     if tap:
         if tap.address.lower() == provider.lower():
             raise SystemExit("FOLIANT_TAP_KEY must be a wallet used by nothing else, not PROVIDER_KEY (nonce race)")
         print("tap enabled from", tap.address, "balance", Web3.from_wei(tap.balance(), "ether"), "AVAX")
+
+    def tap_client(request: Request) -> str:
+        """The caller's IP for the tap's per-client limit (F-1). X-Forwarded-For is client-supplied unless a
+        proxy of ours rewrites it, so it is only believed when FOLIANT_TRUST_PROXY=1, and then its last
+        entry (the one that proxy appended); otherwise the socket peer."""
+        if trust_proxy:
+            xff = request.headers.get("x-forwarded-for", "")
+            if xff.strip():
+                return xff.split(",")[-1].strip()
+        return request.client.host if request.client else "unknown"
 
     @app.exception_handler(PaymentRequired)
     async def _h(_r, exc):
@@ -92,7 +104,8 @@ def make_app() -> FastAPI:
         except Exception:  # noqa: BLE001
             return JSONResponse(status_code=400, content={"error": "JSON body {\"address\": \"0x...\"} required"})
         try:  # give() blocks on the chain for a few seconds: keep it off the event loop (TAP-REVIEW T-4)
-            return await run_in_threadpool(tap.give, body.get("address") if isinstance(body, dict) else None)
+            return await run_in_threadpool(tap.give, body.get("address") if isinstance(body, dict) else None,
+                                           tap_client(request))
         except TapError as e:
             return JSONResponse(status_code=e.status, content={"error": str(e)})
 
