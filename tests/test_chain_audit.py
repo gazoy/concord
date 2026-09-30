@@ -10,6 +10,8 @@ import subprocess
 import time
 
 import pytest
+
+pytest.importorskip("web3")
 from eth_account import Account
 from eth_account.messages import _hash_eip191_message, encode_defunct, encode_typed_data
 from fastapi import Depends, FastAPI, Request, Response

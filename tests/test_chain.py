@@ -7,6 +7,8 @@ import time
 
 import httpx
 import pytest
+
+pytest.importorskip("web3")
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient

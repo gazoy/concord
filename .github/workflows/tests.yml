@@ -3,13 +3,24 @@ on:
   push:
   pull_request:
 jobs:
-  test:
+  python:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: foundry-rs/foundry-toolchain@v1   # anvil, for the EVM backend tests
       - run: pip install -r requirements.txt
       - run: pytest -q
       - run: python demo/run_demo.py
+  contracts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - run: ./setup.sh
+      - run: forge test
