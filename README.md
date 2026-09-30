@@ -27,6 +27,7 @@ The project was called Concord until 28 September 2026; the name was changed to 
 - Website: [foliant.network](https://foliant.network) (served from `docs/` via GitHub Pages)
 - [Whitepaper v0.1](docs/whitepaper.md) — the full design (§6 is what this repo implements)
 - [Design, feasibility and cost study](docs/study.md) — chain survey, build routes, costs, risks
+- [Agent Spending Policy, draft 0.1](docs/spec/spending-policy.md) — the policy tree as a chain-agnostic specification: schema, 115 conformance vectors run against both references, an x402 `exact` binding, and an [independent review](docs/spec/REVIEW-1.md)
 
 ## Demo
 
