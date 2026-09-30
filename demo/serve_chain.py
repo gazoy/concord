@@ -11,6 +11,13 @@ visitor's address, only when FOLIANT_TAP_KEY is set; per-client limit keyed by t
 X-Forwarded-For only when FOLIANT_TRUST_PROXY=1; see demo/tap.py). Agents talk to the chain directly
 for opening channels and joining the pool (see foliant.chain.ChainAgent); this server only verifies their
 off-chain updates and settles.
+
+Behind a reverse proxy, give POST /tap a read timeout of at least 2 x demo.tap.RECEIPT_TIMEOUT (two
+minutes by default): a give waits for two receipts, so a proxy with the usual 60 s read timeout returns
+504 to the visitor while the tap is still funding them, and the visitor's one attempt is spent on what
+looks to them like a failure (F-11). A POST /tap body is refused 413 as soon as it passes 1 KiB: the
+request is read a chunk at a time and abandoned there, so a body with no content-length is not buffered
+in full either (D3).
 """
 from __future__ import annotations
 
@@ -29,6 +36,8 @@ from starlette.concurrency import run_in_threadpool
 
 from foliant.chain import ChainGate, ChainLedger, ChainOffer, ChainPayment, PaymentRequired, _hex
 from demo.tap import TapError, tap_from_env
+
+MAX_TAP_BODY = 1024  # bytes; POST /tap takes one address and nothing else (F-11)
 
 
 def make_app() -> FastAPI:
@@ -59,7 +68,11 @@ def make_app() -> FastAPI:
 
     app = FastAPI(title="Foliant metered API (chain)", lifespan=lifespan)
     settle_key = env.get("FOLIANT_SETTLE_KEY")  # if set, POST /settle needs it in X-Settle-Key
-    tap = tap_from_env(L, env)
+    try:
+        tap = tap_from_env(L, env)
+    except TapError as e:  # an unreadable tap state file, say: the tap is optional and must not take
+        tap = None         # /infer, /chain and /settle down with it (F-6)
+        print(f"!! tap disabled: {e}", file=sys.stderr, flush=True)
     trust_proxy = env.get("FOLIANT_TRUST_PROXY") == "1"  # behind a reverse proxy that sets X-Forwarded-For
     if tap:
         if tap.address.lower() == provider.lower():
@@ -110,8 +123,20 @@ def make_app() -> FastAPI:
     async def tap_endpoint(request: Request):
         if tap is None:
             return JSONResponse(status_code=404, content={"error": "no tap on this server"})
+        # the only body we accept is {"address": "0x..."}: refuse anything larger on the declared
+        # length, and otherwise read it a chunk at a time and stop at the bound rather than buffering
+        # whatever a visitor sends under a chunked encoding (F-11, D3)
+        too_big = JSONResponse(status_code=413, content={"error": f"body over {MAX_TAP_BODY} bytes"})
+        declared = request.headers.get("content-length")
+        if declared is not None and declared.isdigit() and int(declared) > MAX_TAP_BODY:
+            return too_big
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw += chunk
+            if len(raw) > MAX_TAP_BODY:
+                return too_big
         try:
-            body = await request.json()
+            body = json.loads(raw)
         except Exception:  # noqa: BLE001
             return JSONResponse(status_code=400, content={"error": "JSON body {\"address\": \"0x...\"} required"})
         try:  # give() blocks on the chain for a few seconds: keep it off the event loop (TAP-REVIEW T-4)
