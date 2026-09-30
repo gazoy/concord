@@ -34,7 +34,8 @@ contract AuditSpecTest is Test {
     }
 
     /// S-2: the contract encodes "never" as expiry 0. The spec now forbids 0 on the wire (null means
-    /// never) and makes rejecting it the decoder's job; the Python reference rejects it at load.
+    /// never) and makes rejecting it the decoder's job; the Python reference rejects it, and the
+    /// zero-address co-signer, at load.
     function test_S2_expiry_zero_is_never_on_chain() public {
         AgentAccounts.PolicyInput memory p = _wide(60);
         p.expiry = 0;

@@ -56,6 +56,10 @@ class Policy:
         if self.allow_list is not None:
             self.allow_list = frozenset(canonical_address(a) for a in self.allow_list)
         self.deny_list = frozenset(canonical_address(a) for a in self.deny_list)
+        if isinstance(self.escalation, str):  # address-form co-signer (spec §2): canonical, never the zero address
+            self.escalation = canonical_address(self.escalation)
+            if self.escalation == "0x" + "0" * 40:
+                raise PolicyViolation("escalation must not be the zero address", "policy_invalid")
 
     @property
     def id(self) -> str:
@@ -225,9 +229,10 @@ class SpendWindow:
         self.entries = [(t, a) for t, a in self.entries if t > cutoff]
         return sum(a for _, a in self.entries)
 
-    def rewindow(self, now: int, old_window_secs: int) -> None:
-        """Call at the moment the window length changes, with the length that has been in force."""
-        self.spent(now, old_window_secs)
+    def rewindow(self, changed_at: int, old_window_secs: int) -> None:
+        """Apply a window-length change: prune under the outgoing length as of `changed_at`, the
+        time the change took effect (spec §6.1: the outgoing length applies at that instant)."""
+        self.spent(changed_at, old_window_secs)
 
     def record(self, now: int, amount: int) -> None:
         self.entries.append((now, amount))
@@ -284,10 +289,12 @@ class AgentSigner:
     def public(self) -> PublicKey:
         return self.keypair.public
 
-    def set_policy(self, policy: Policy, now: int) -> None:
-        """Replace the policy (an administrator changed it); spec §6.1 prunes under the old window first."""
+    def set_policy(self, policy: Policy, changed_at: int) -> None:
+        """Replace the policy (an administrator changed it). Spec §6.1: prune under the outgoing
+        window as of the moment the change took effect on the ledger, `changed_at`, not as of the
+        moment this signer learns of it, or the two sides diverge (REVIEW-1 round 2, S-1b)."""
         if policy.window_secs != self.policy.window_secs:
-            self.window.rewindow(now, self.policy.window_secs)
+            self.window.rewindow(changed_at, self.policy.window_secs)
         self.policy = policy
 
     def sign_payment(self, *, payee: str, amount: int, now: int, body: dict, escalated: bool = False) -> Signed:

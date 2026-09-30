@@ -98,7 +98,9 @@
           "type": "string"
         },
         "key": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^[0-9a-f]+$",
+          "description": "Lowercase hex."
         }
       }
     }

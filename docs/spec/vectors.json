@@ -3602,6 +3602,21 @@
    "note": "an empty allow list is valid (and permits no payee)"
   },
   {
+   "id": "policy-009",
+   "kind": "policy",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": "0x0000000000000000000000000000000000000000"
+   },
+   "expect": "policy_invalid",
+   "note": "the zero address is not a co-signer (\u00a72)"
+  },
+  {
    "id": "id-001",
    "kind": "id",
    "policy": {
@@ -3652,6 +3667,23 @@
    },
    "expect": "11965066ba8f1cd9d743a0e03f80f21c617db52b86bef74a1837121da8e18d2b",
    "note": "a keyRef co-signer"
+  },
+  {
+   "id": "id-004",
+   "kind": "id",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    ],
+    "denyList": [],
+    "expiry": null,
+    "escalation": "0xEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"
+   },
+   "expect": "814aea33cc046b73a7ad9d78a1414b8a75270c82998ce15fb4a9cb35f9da4cd6",
+   "note": "addresses are canonicalised before hashing (given in mixed case on purpose)"
   },
   {
    "id": "x402-027",

@@ -47,7 +47,7 @@ contract SpecVectorsTest is Test {
     function test_within_vectors() public { _run("within", 22, 0); }
     function test_window_vectors() public { _run("window", 3, 3); }     // 3 exactOnly skipped
     function test_tree_vectors() public { _run("tree", 8, 0); }
-    function test_policy_vectors() public { _run("policy", 7, 1); }     // policy-003 skipped (header)
+    function test_policy_vectors() public { _run("policy", 7, 2); }     // policy-003, policy-009 skipped (header)
 
     function _run(string memory want, uint256 expectRan, uint256 expectSkipped) internal {
         uint256 ran; uint256 skipped;
@@ -113,10 +113,11 @@ contract SpecVectorsTest is Test {
     }
 
     /// `policy` vectors: the wire decoder rejects what it cannot represent (uint128 fields), the
-    /// contract rejects what it validates (windowSecs). expiry 0 is the contract's own null
-    /// encoding, so a wire-form expiry of 0 is the decoder's rejection, not the contract's: skipped.
+    /// contract rejects what it validates (windowSecs). A wire-form expiry of 0 or a zero-address
+    /// co-signer are the contract's own null encodings, indistinguishable from null once parsed by
+    /// the cheatcodes, so their rejection is the JSON decoder's, not the contract's: skipped.
     function _policyValidity(string memory p, string memory id) internal returns (bool) {
-        if (eq(id, "policy-003")) return false;
+        if (eq(id, "policy-003") || eq(id, "policy-009")) return false;
         string memory expect = vm.parseJsonString(json, string.concat(p, ".expect"));
         (bool decodable, AgentAccounts.PolicyInput memory pol) = _tryPolicy(string.concat(p, ".policy"));
         if (!decodable) { assertEq(expect, "policy_invalid", id); return true; }
@@ -333,7 +334,11 @@ contract SpecVectorsTest is Test {
         }
         pol.denyList = vm.parseJsonAddressArray(json, string.concat(p, ".denyList"));
         bytes memory expRaw = vm.parseJson(json, string.concat(p, ".expiry"));
-        if (!_isNull(expRaw)) pol.expiry = uint64(vm.parseJsonUint(json, string.concat(p, ".expiry")));
+        if (!_isNull(expRaw)) {
+            uint256 e = vm.parseJsonUint(json, string.concat(p, ".expiry"));
+            if (e > type(uint64).max) return (false, pol);
+            pol.expiry = uint64(e);
+        }
         bytes memory escRaw = vm.parseJson(json, string.concat(p, ".escalation"));
         if (!_isNull(escRaw)) pol.escalation = esc; // the co-signer this test holds (header)
         return (true, pol);
