@@ -1,0 +1,4168 @@
+{
+ "spec": "Agent Spending Policy draft 0.1 (spending-policy.md)",
+ "format": {
+  "check": "check(policy, amount, payee, now, spentInWindow, escalated) -> expect ('ok' or a \u00a73 reason code)",
+  "within": "within(child, parent) -> expect ('ok' or a \u00a74.1 reason code)",
+  "window": "one account, windowSecs; ops in order: {t, record} adds a spend at t; {t, expect} asserts spentInWindow(t) exactly (\u00a76.1); {t, setWindow} changes windowSecs. An approximate implementation (\u00a76.2) asserts got >= expect and got <= sum of records with t' > t - windowSecs - B for its documented B; vectors marked exactOnly change windowSecs and are for exact implementations only",
+  "tree": "accounts with parent links and policies (every account funded amply); ops in order at time t: spend {from, payee, amount, escalated?} -> expect ok or the first failing reason code walking from the account to the root; fund {from, to, amount} (from MUST be to's parent) and recall {from, of, amount} are internal moves; setPolicy {by, of, policy} where by is an account name (an ancestor's signer) or \"owner\" -> ok or a \u00a74.1 code; spentInWindow {of} -> expect the exact \u00a76.1 figure",
+  "x402-exact": "check_exact(payment, requirements, chain, spentInWindow, now, escalated, expectedPayer?) -> expect ok (with the extracted spend) or a \u00a77.2 / \u00a73 reason code; chain is the paying account's policy first, then each ancestor; spentInWindow has one figure per policy",
+  "policy": "a policy document -> expect ok or policy_invalid (\u00a72); a binary encoding that cannot represent a value rejects at decode time, which counts as policy_invalid",
+  "id": "a policy document -> its \u00a72.2 id (hex SHA-256 of the canonical wire encoding); implementations that hash a binary struct instead skip this kind and say so"
+ },
+ "vectors": [
+  {
+   "id": "check-001",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "500",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "ok",
+   "note": "at perTxMax exactly"
+  },
+  {
+   "id": "check-002",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "501",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "per_tx_exceeded"
+  },
+  {
+   "id": "check-003",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "0",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "ok",
+   "note": "zero amount passes 5 and 6"
+  },
+  {
+   "id": "check-004",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "500",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "1500",
+   "escalated": false,
+   "expect": "ok",
+   "note": "fills the window exactly"
+  },
+  {
+   "id": "check-005",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "500",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "1501",
+   "escalated": false,
+   "expect": "per_window_exceeded"
+  },
+  {
+   "id": "check-006",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "2000",
+   "escalated": false,
+   "expect": "per_window_exceeded",
+   "note": "window already full"
+  },
+  {
+   "id": "check-007",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": 1000,
+    "escalation": null
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 999,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "ok",
+   "note": "one second before expiry"
+  },
+  {
+   "id": "check-008",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": 1000,
+    "escalation": null
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "expired",
+   "note": "expiry is inclusive"
+  },
+  {
+   "id": "check-009",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": 1000,
+    "escalation": null
+   },
+   "amount": "0",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "expired",
+   "note": "zero amount still subject to expiry"
+  },
+  {
+   "id": "check-010",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "payee_denied"
+  },
+  {
+   "id": "check-011",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "1",
+   "payee": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "ok"
+  },
+  {
+   "id": "check-012",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "ok"
+  },
+  {
+   "id": "check-013",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "1",
+   "payee": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "payee_not_allowed"
+  },
+  {
+   "id": "check-014",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "payee_not_allowed",
+   "note": "empty allow list permits no payee"
+  },
+  {
+   "id": "check-015",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "denyList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "payee_denied",
+   "note": "deny checked before allow"
+  },
+  {
+   "id": "check-016",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "expiry": 1000,
+    "escalation": null
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "expired",
+   "note": "expiry checked before deny"
+  },
+  {
+   "id": "check-017",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "501",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "payee_denied",
+   "note": "deny checked before per-tx"
+  },
+  {
+   "id": "check-018",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "501",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "payee_not_allowed",
+   "note": "allow checked before per-tx"
+  },
+  {
+   "id": "check-019",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "501",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "1500",
+   "escalated": false,
+   "expect": "per_tx_exceeded",
+   "note": "per-tx checked before per-window"
+  },
+  {
+   "id": "check-020",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+   },
+   "amount": "501",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": true,
+   "expect": "ok",
+   "note": "escalation lifts perTxMax"
+  },
+  {
+   "id": "check-021",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+   },
+   "amount": "2000",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": true,
+   "expect": "ok",
+   "note": "escalated up to the window cap"
+  },
+  {
+   "id": "check-022",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+   },
+   "amount": "2001",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": true,
+   "expect": "per_window_exceeded",
+   "note": "escalation never lifts the window cap"
+  },
+  {
+   "id": "check-023",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+   },
+   "amount": "501",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "1500",
+   "escalated": true,
+   "expect": "per_window_exceeded"
+  },
+  {
+   "id": "check-024",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "expiry": null,
+    "escalation": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+   },
+   "amount": "501",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": true,
+   "expect": "payee_denied",
+   "note": "escalation does not lift deny"
+  },
+  {
+   "id": "check-025",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": 1000,
+    "escalation": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": true,
+   "expect": "expired",
+   "note": "escalation does not lift expiry"
+  },
+  {
+   "id": "check-026",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "0",
+    "perWindowMax": "0",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "0",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "ok",
+   "note": "a zero policy permits zero"
+  },
+  {
+   "id": "check-027",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "0",
+    "perWindowMax": "0",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "per_tx_exceeded"
+  },
+  {
+   "id": "check-028",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "340282366920938463463374607431768211455",
+    "perWindowMax": "340282366920938463463374607431768211455",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "340282366920938463463374607431768211455",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "ok",
+   "note": "uint128 max fits"
+  },
+  {
+   "id": "check-029",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "340282366920938463463374607431768211455",
+    "perWindowMax": "340282366920938463463374607431768211455",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "340282366920938463463374607431768211455",
+   "escalated": false,
+   "expect": "per_window_exceeded",
+   "note": "spent + amount must not wrap"
+  },
+  {
+   "id": "check-030",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "1",
+   "payee": "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "ok",
+   "note": "payee compared in canonical form (the payee is given in mixed case on purpose)"
+  },
+  {
+   "id": "check-031",
+   "kind": "check",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [
+     "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    ],
+    "expiry": null,
+    "escalation": null
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "expect": "payee_denied",
+   "note": "list entries are canonicalised too (the deny entry is given in mixed case on purpose)"
+  },
+  {
+   "id": "within-001",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok",
+   "note": "identical"
+  },
+  {
+   "id": "within-002",
+   "kind": "within",
+   "child": {
+    "perTxMax": "100",
+    "perWindowMax": "300",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok"
+  },
+  {
+   "id": "within-003",
+   "kind": "within",
+   "child": {
+    "perTxMax": "501",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "child_per_tx_wider"
+  },
+  {
+   "id": "within-004",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2001",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "child_per_window_wider"
+  },
+  {
+   "id": "within-005",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 60,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok",
+   "note": "windowSecs not compared (shorter)"
+  },
+  {
+   "id": "within-006",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 86400,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok",
+   "note": "windowSecs not compared (longer)"
+  },
+  {
+   "id": "within-007",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok"
+  },
+  {
+   "id": "within-008",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "0xcccccccccccccccccccccccccccccccccccccccc"
+    ],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "child_allow_wider"
+  },
+  {
+   "id": "within-009",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "child_allow_wider",
+   "note": "parent restricted, child unrestricted"
+  },
+  {
+   "id": "within-010",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok",
+   "note": "parent unrestricted"
+  },
+  {
+   "id": "within-011",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok",
+   "note": "empty is a subset"
+  },
+  {
+   "id": "within-012",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok"
+  },
+  {
+   "id": "within-013",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "child_deny_narrower"
+  },
+  {
+   "id": "within-014",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok",
+   "note": "child may deny more"
+  },
+  {
+   "id": "within-015",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": 999,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": 1000,
+    "escalation": null
+   },
+   "expect": "ok"
+  },
+  {
+   "id": "within-016",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": 1000,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": 1000,
+    "escalation": null
+   },
+   "expect": "ok",
+   "note": "equal expiry"
+  },
+  {
+   "id": "within-017",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": 1001,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": 1000,
+    "escalation": null
+   },
+   "expect": "child_expiry_later"
+  },
+  {
+   "id": "within-018",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": 1000,
+    "escalation": null
+   },
+   "expect": "child_expiry_later",
+   "note": "parent expires, child never"
+  },
+  {
+   "id": "within-019",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": 1000,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok",
+   "note": "parent never expires"
+  },
+  {
+   "id": "within-020",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok",
+   "note": "escalation not compared"
+  },
+  {
+   "id": "within-021",
+   "kind": "within",
+   "child": {
+    "perTxMax": "501",
+    "perWindowMax": "2001",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "child_per_tx_wider",
+   "note": "first failing axis reported"
+  },
+  {
+   "id": "within-022",
+   "kind": "within",
+   "child": {
+    "perTxMax": "500",
+    "perWindowMax": "2001",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "child_per_window_wider",
+   "note": "order: window before allow"
+  },
+  {
+   "id": "window-001",
+   "kind": "window",
+   "windowSecs": 3600,
+   "ops": [
+    {
+     "t": 1000,
+     "record": "100"
+    },
+    {
+     "t": 1000,
+     "expect": "100"
+    },
+    {
+     "t": 4599,
+     "expect": "100",
+     "note": "3599 s later: still inside"
+    },
+    {
+     "t": 4600,
+     "expect": "0",
+     "note": "exactly windowSecs later: dropped (t > now - W fails at equality)"
+    }
+   ],
+   "note": "a spend counts for exactly windowSecs seconds"
+  },
+  {
+   "id": "window-002",
+   "kind": "window",
+   "windowSecs": 3600,
+   "ops": [
+    {
+     "t": 1000,
+     "record": "100"
+    },
+    {
+     "t": 2000,
+     "record": "200"
+    },
+    {
+     "t": 3000,
+     "record": "300"
+    },
+    {
+     "t": 3000,
+     "expect": "600"
+    },
+    {
+     "t": 4600,
+     "expect": "500"
+    },
+    {
+     "t": 5600,
+     "expect": "300"
+    },
+    {
+     "t": 6600,
+     "expect": "0"
+    }
+   ],
+   "note": "spends age out one by one"
+  },
+  {
+   "id": "window-003",
+   "kind": "window",
+   "windowSecs": 60,
+   "ops": [
+    {
+     "t": 1000,
+     "record": "1"
+    },
+    {
+     "t": 1059,
+     "expect": "1"
+    },
+    {
+     "t": 1060,
+     "expect": "0"
+    }
+   ],
+   "note": "short window"
+  },
+  {
+   "id": "window-004",
+   "kind": "window",
+   "windowSecs": 3600,
+   "ops": [
+    {
+     "t": 1000,
+     "record": "100"
+    },
+    {
+     "t": 2000,
+     "record": "100"
+    },
+    {
+     "t": 4700,
+     "expect": "100",
+     "note": "first spend aged out"
+    },
+    {
+     "t": 4700,
+     "setWindow": 86400
+    },
+    {
+     "t": 4700,
+     "expect": "100",
+     "note": "\u00a76.1: the 1000 spend aged out under the window in force before the change, so lengthening does not bring it back"
+    },
+    {
+     "t": 5700,
+     "record": "100"
+    },
+    {
+     "t": 5700,
+     "expect": "200"
+    },
+    {
+     "t": 88400,
+     "expect": "100",
+     "note": "the 2000 spend aged out under the long window"
+    }
+   ],
+   "note": "window lengthened mid-sequence",
+   "exactOnly": true
+  },
+  {
+   "id": "window-006",
+   "kind": "window",
+   "windowSecs": 3600,
+   "ops": [
+    {
+     "t": 1000,
+     "record": "100"
+    },
+    {
+     "t": 2000,
+     "setWindow": 86400,
+     "note": "lengthened before the spend aged out"
+    },
+    {
+     "t": 4700,
+     "expect": "100",
+     "note": "still counted: it never aged out under any window in force"
+    },
+    {
+     "t": 87399,
+     "expect": "100"
+    },
+    {
+     "t": 87400,
+     "expect": "0",
+     "note": "1000 + 86400: aged out under the long window"
+    }
+   ],
+   "note": "window lengthened before a spend ages out",
+   "exactOnly": true
+  },
+  {
+   "id": "window-005",
+   "kind": "window",
+   "windowSecs": 86400,
+   "ops": [
+    {
+     "t": 1000,
+     "record": "100"
+    },
+    {
+     "t": 2000,
+     "record": "100"
+    },
+    {
+     "t": 2000,
+     "setWindow": 60
+    },
+    {
+     "t": 2000,
+     "expect": "100",
+     "note": "shortening drops the older spend at once"
+    },
+    {
+     "t": 2060,
+     "expect": "0"
+    }
+   ],
+   "note": "window shortened mid-sequence",
+   "exactOnly": true
+  },
+  {
+   "id": "tree-001",
+   "kind": "tree",
+   "accounts": [
+    {
+     "name": "root",
+     "parent": null,
+     "policy": {
+      "perTxMax": "500",
+      "perWindowMax": "2000",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    },
+    {
+     "name": "w",
+     "parent": "root",
+     "policy": {
+      "perTxMax": "100",
+      "perWindowMax": "300",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    }
+   ],
+   "ops": [
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "100"
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "spentInWindow": {
+      "of": "w"
+     },
+     "expect": "100"
+    },
+    {
+     "t": 1000,
+     "spentInWindow": {
+      "of": "root"
+     },
+     "expect": "100",
+     "note": "recorded in the ancestor too"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "101"
+     },
+     "expect": "per_tx_exceeded",
+     "note": "child's own cap"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "100"
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "100"
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "1"
+     },
+     "expect": "per_window_exceeded",
+     "note": "child's window full"
+    },
+    {
+     "t": 1000,
+     "spentInWindow": {
+      "of": "root"
+     },
+     "expect": "300"
+    }
+   ],
+   "note": "a child is bound by its own policy and records up the tree"
+  },
+  {
+   "id": "tree-002",
+   "kind": "tree",
+   "accounts": [
+    {
+     "name": "root",
+     "parent": null,
+     "policy": {
+      "perTxMax": "500",
+      "perWindowMax": "2000",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    },
+    {
+     "name": "w",
+     "parent": "root",
+     "policy": {
+      "perTxMax": "100",
+      "perWindowMax": "300",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    }
+   ],
+   "ops": [
+    {
+     "t": 1000,
+     "spend": {
+      "from": "root",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "500"
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "root",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "500"
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "root",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "500"
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "root",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "400"
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "spentInWindow": {
+      "of": "root"
+     },
+     "expect": "1900"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "100"
+     },
+     "expect": "ok",
+     "note": "exactly fills the root"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "1"
+     },
+     "expect": "per_window_exceeded",
+     "note": "the child has 199 left in its own window; the root has none"
+    },
+    {
+     "t": 1000,
+     "spentInWindow": {
+      "of": "w"
+     },
+     "expect": "100",
+     "note": "the rejected spend was not recorded"
+    },
+    {
+     "t": 1000,
+     "spentInWindow": {
+      "of": "root"
+     },
+     "expect": "2000"
+    }
+   ],
+   "note": "an ancestor's window binds a child that has room of its own"
+  },
+  {
+   "id": "tree-003",
+   "kind": "tree",
+   "accounts": [
+    {
+     "name": "root",
+     "parent": null,
+     "policy": {
+      "perTxMax": "500",
+      "perWindowMax": "2000",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    },
+    {
+     "name": "w",
+     "parent": "root",
+     "policy": {
+      "perTxMax": "100",
+      "perWindowMax": "300",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    }
+   ],
+   "ops": [
+    {
+     "t": 1000,
+     "fund": {
+      "from": "root",
+      "to": "w",
+      "amount": "1000"
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "spentInWindow": {
+      "of": "root"
+     },
+     "expect": "0",
+     "note": "funding a child is not a spend"
+    },
+    {
+     "t": 1000,
+     "spentInWindow": {
+      "of": "w"
+     },
+     "expect": "0"
+    },
+    {
+     "t": 1000,
+     "recall": {
+      "from": "root",
+      "of": "w",
+      "amount": "1000"
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "spentInWindow": {
+      "of": "root"
+     },
+     "expect": "0",
+     "note": "recall is not a spend"
+    }
+   ],
+   "note": "internal moves are not spends"
+  },
+  {
+   "id": "tree-004",
+   "kind": "tree",
+   "accounts": [
+    {
+     "name": "root",
+     "parent": null,
+     "policy": {
+      "perTxMax": "500",
+      "perWindowMax": "2000",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    },
+    {
+     "name": "w",
+     "parent": "root",
+     "policy": {
+      "perTxMax": "100",
+      "perWindowMax": "300",
+      "windowSecs": 3600,
+      "allowList": [
+       "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    }
+   ],
+   "ops": [
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "amount": "1"
+     },
+     "expect": "payee_not_allowed"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "1"
+     },
+     "expect": "ok"
+    }
+   ],
+   "note": "a child's allow list binds the child"
+  },
+  {
+   "id": "tree-005",
+   "kind": "tree",
+   "accounts": [
+    {
+     "name": "root",
+     "parent": null,
+     "policy": {
+      "perTxMax": "500",
+      "perWindowMax": "2000",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [
+       "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "expiry": null,
+      "escalation": null
+     }
+    },
+    {
+     "name": "w",
+     "parent": "root",
+     "policy": {
+      "perTxMax": "100",
+      "perWindowMax": "300",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [
+       "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "expiry": null,
+      "escalation": null
+     }
+    }
+   ],
+   "ops": [
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "amount": "1"
+     },
+     "expect": "payee_denied"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "1"
+     },
+     "expect": "ok"
+    }
+   ],
+   "note": "a parent's deny list is inherited (within requires it) and enforced"
+  },
+  {
+   "id": "tree-006",
+   "kind": "tree",
+   "accounts": [
+    {
+     "name": "root",
+     "parent": null,
+     "policy": {
+      "perTxMax": "500",
+      "perWindowMax": "2000",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    },
+    {
+     "name": "w",
+     "parent": "root",
+     "policy": {
+      "perTxMax": "100",
+      "perWindowMax": "300",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    },
+    {
+     "name": "ww",
+     "parent": "w",
+     "policy": {
+      "perTxMax": "50",
+      "perWindowMax": "100",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    }
+   ],
+   "ops": [
+    {
+     "t": 1000,
+     "spend": {
+      "from": "ww",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "50"
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "spentInWindow": {
+      "of": "ww"
+     },
+     "expect": "50"
+    },
+    {
+     "t": 1000,
+     "spentInWindow": {
+      "of": "w"
+     },
+     "expect": "50"
+    },
+    {
+     "t": 1000,
+     "spentInWindow": {
+      "of": "root"
+     },
+     "expect": "50",
+     "note": "recorded at every ancestor"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "100"
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "100"
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "ww",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "50"
+     },
+     "expect": "ok",
+     "note": "w now at 300 of 300"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "ww",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "1"
+     },
+     "expect": "per_window_exceeded",
+     "note": "ww's window is full (100 of 100) and so is w's (300 of 300); the first failure walking up is ww's"
+    },
+    {
+     "t": 4800,
+     "spend": {
+      "from": "ww",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "50"
+     },
+     "expect": "ok",
+     "note": "well past every window (3600 s plus any \u00a76.2 over-count bound): everything has aged out"
+    }
+   ],
+   "note": "three levels"
+  },
+  {
+   "id": "tree-007",
+   "kind": "tree",
+   "accounts": [
+    {
+     "name": "root",
+     "parent": null,
+     "policy": {
+      "perTxMax": "500",
+      "perWindowMax": "2000",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    },
+    {
+     "name": "w",
+     "parent": "root",
+     "policy": {
+      "perTxMax": "100",
+      "perWindowMax": "300",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    }
+   ],
+   "ops": [
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "100"
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "setPolicy": {
+      "by": "root",
+      "of": "w",
+      "policy": {
+       "perTxMax": "100",
+       "perWindowMax": "300",
+       "windowSecs": 3600,
+       "allowList": [],
+       "denyList": [],
+       "expiry": null,
+       "escalation": null
+      }
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "1"
+     },
+     "expect": "payee_not_allowed",
+     "note": "an ancestor tightened the child"
+    },
+    {
+     "t": 1000,
+     "setPolicy": {
+      "by": "root",
+      "of": "w",
+      "policy": {
+       "perTxMax": "600",
+       "perWindowMax": "300",
+       "windowSecs": 3600,
+       "allowList": null,
+       "denyList": [],
+       "expiry": null,
+       "escalation": null
+      }
+     },
+     "expect": "child_per_tx_wider",
+     "note": "within is checked on setPolicy"
+    }
+   ],
+   "note": "ancestors administer descendants; within applies to replacement policies"
+  },
+  {
+   "id": "tree-008",
+   "kind": "tree",
+   "accounts": [
+    {
+     "name": "root",
+     "parent": null,
+     "policy": {
+      "perTxMax": "500",
+      "perWindowMax": "2000",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    },
+    {
+     "name": "w",
+     "parent": "root",
+     "policy": {
+      "perTxMax": "100",
+      "perWindowMax": "300",
+      "windowSecs": 3600,
+      "allowList": null,
+      "denyList": [],
+      "expiry": null,
+      "escalation": null
+     }
+    }
+   ],
+   "ops": [
+    {
+     "t": 1000,
+     "setPolicy": {
+      "by": "owner",
+      "of": "root",
+      "policy": {
+       "perTxMax": "500",
+       "perWindowMax": "150",
+       "windowSecs": 3600,
+       "allowList": null,
+       "denyList": [],
+       "expiry": null,
+       "escalation": null
+      }
+     },
+     "expect": "ok",
+     "note": "the owner tightens the root below the child's cap; the child keeps its wider policy (an account's own signer may not change its policy, \u00a74.4)"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "100"
+     },
+     "expect": "ok"
+    },
+    {
+     "t": 1000,
+     "spend": {
+      "from": "w",
+      "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "100"
+     },
+     "expect": "per_window_exceeded",
+     "note": "the child's own 300 is not the bound; the root's 150 is"
+    }
+   ],
+   "note": "a tightened ancestor binds a wider child (4.2)"
+  },
+  {
+   "id": "x402-001",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "ok",
+   "spend": {
+    "amount": "10000",
+    "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "network": "eip155:84532",
+    "payer": "0x1111111111111111111111111111111111111111"
+   },
+   "note": "v2, requirements taken from accepted"
+  },
+  {
+   "id": "x402-002",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": {
+    "scheme": "exact",
+    "network": "eip155:84532",
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "amount": "10000",
+    "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "maxTimeoutSeconds": 60,
+    "extra": {
+     "name": "USDC",
+     "version": "2"
+    }
+   },
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "ok",
+   "spend": {
+    "amount": "10000",
+    "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "network": "eip155:84532",
+    "payer": "0x1111111111111111111111111111111111111111"
+   },
+   "note": "v2 with matching requirements"
+  },
+  {
+   "id": "x402-003",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": {
+    "scheme": "exact",
+    "network": "eip155:84532",
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "amount": "10001",
+    "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "maxTimeoutSeconds": 60,
+    "extra": {
+     "name": "USDC",
+     "version": "2"
+    }
+   },
+   "chain": [
+    {
+     "perTxMax": "500",
+     "perWindowMax": "2000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "requirements_mismatch"
+  },
+  {
+   "id": "x402-004",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "9999",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "per_tx_exceeded"
+  },
+  {
+   "id": "x402-005",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "40001"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "per_window_exceeded"
+  },
+  {
+   "id": "x402-006",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": [
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     ],
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "payee_not_allowed"
+  },
+  {
+   "id": "x402-007",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": 1700000000,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "expired",
+   "note": "now, not validBefore, decides expiry"
+  },
+  {
+   "id": "x402-008",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "payee_mismatch",
+   "note": "authorization.to must equal payTo"
+  },
+  {
+   "id": "x402-009",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "9999",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "amount_mismatch",
+   "note": "exact means exact: a smaller authorised value is not a smaller spend"
+  },
+  {
+   "id": "x402-010",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10001",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "amount_mismatch"
+  },
+  {
+   "id": "x402-011",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "upto",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "500",
+     "perWindowMax": "2000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "unsupported_scheme"
+  },
+  {
+   "id": "x402-012",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "500",
+     "perWindowMax": "2000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "malformed_payment",
+   "note": "no accepted"
+  },
+  {
+   "id": "x402-013",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 3,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "500",
+     "perWindowMax": "2000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "malformed_payment"
+  },
+  {
+   "id": "x402-014",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "signature": "0x00"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "500",
+     "perWindowMax": "2000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "malformed_payment",
+   "note": "no authorization"
+  },
+  {
+   "id": "x402-015",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "ok",
+   "spend": {
+    "amount": "10000",
+    "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "network": "eip155:84532",
+    "payer": "0x1111111111111111111111111111111111111111"
+   },
+   "note": "recipient compared canonically"
+  },
+  {
+   "id": "x402-016",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    },
+    {
+     "perTxMax": "500000",
+     "perWindowMax": "20000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0",
+    "15000"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "per_window_exceeded",
+   "note": "chain: the account passes, its parent's window does not"
+  },
+  {
+   "id": "x402-017",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": [
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+     ],
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    },
+    {
+     "perTxMax": "500000",
+     "perWindowMax": "2000000",
+     "windowSecs": 3600,
+     "allowList": [
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     ],
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0",
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "payee_not_allowed",
+   "note": "a parent's allow list binds"
+  },
+  {
+   "id": "x402-018",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "5000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": true,
+   "expect": "ok",
+   "spend": {
+    "amount": "10000",
+    "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "network": "eip155:84532",
+    "payer": "0x1111111111111111111111111111111111111111"
+   },
+   "note": "escalated lifts the account's perTxMax"
+  },
+  {
+   "id": "x402-019",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "5000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    {
+     "perTxMax": "5000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0",
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": true,
+   "expect": "per_tx_exceeded",
+   "note": "escalation never applies to ancestors"
+  },
+  {
+   "id": "x402-020",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 1,
+    "scheme": "exact",
+    "network": "base-sepolia",
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    }
+   },
+   "requirements": {
+    "scheme": "exact",
+    "network": "base-sepolia",
+    "maxAmountRequired": "10000",
+    "resource": "https://api.example/infer",
+    "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "maxTimeoutSeconds": 60,
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
+   },
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "ok",
+   "spend": {
+    "amount": "10000",
+    "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "network": "base-sepolia",
+    "payer": "0x1111111111111111111111111111111111111111"
+   },
+   "note": "v1 shape"
+  },
+  {
+   "id": "x402-021",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 1,
+    "scheme": "exact",
+    "network": "base-sepolia",
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "500",
+     "perWindowMax": "2000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "malformed_payment",
+   "note": "v1 needs requirements"
+  },
+  {
+   "id": "x402-022",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 1,
+    "scheme": "exact",
+    "network": "base",
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    }
+   },
+   "requirements": {
+    "scheme": "exact",
+    "network": "base-sepolia",
+    "maxAmountRequired": "10000",
+    "resource": "https://api.example/infer",
+    "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "maxTimeoutSeconds": 60,
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
+   },
+   "chain": [
+    {
+     "perTxMax": "500",
+     "perWindowMax": "2000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "requirements_mismatch"
+  },
+  {
+   "id": "x402-023",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 1,
+    "scheme": "exact",
+    "network": "base-sepolia",
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    }
+   },
+   "requirements": {
+    "scheme": "exact",
+    "network": "base-sepolia",
+    "maxAmountRequired": "9000",
+    "resource": "https://api.example/infer",
+    "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "maxTimeoutSeconds": 60,
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
+   },
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "amount_mismatch",
+   "note": "v1: value must equal maxAmountRequired"
+  },
+  {
+   "id": "x402-024",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "permit2Authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "permitted": {
+       "token": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+       "amount": "10000"
+      },
+      "spender": "0x402085c248EeA27D92E8b30b2C58ed07f9E20001",
+      "nonce": "1",
+      "deadline": "1700000060",
+      "witness": {
+       "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "validAfter": "0"
+      }
+     },
+     "signature": "0x2222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "ok",
+   "spend": {
+    "amount": "10000",
+    "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "network": "eip155:84532",
+    "payer": "0x1111111111111111111111111111111111111111"
+   },
+   "note": "Permit2 payload"
+  },
+  {
+   "id": "x402-025",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "permit2Authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "permitted": {
+       "token": "0x9999999999999999999999999999999999999999",
+       "amount": "10000"
+      },
+      "spender": "0x402085c248EeA27D92E8b30b2C58ed07f9E20001",
+      "nonce": "1",
+      "deadline": "1700000060",
+      "witness": {
+       "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "validAfter": "0"
+      }
+     },
+     "signature": "0x2222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "asset_mismatch"
+  },
+  {
+   "id": "x402-026",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "permit2Authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "permitted": {
+       "token": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+       "amount": "10000"
+      },
+      "spender": "0x402085c248EeA27D92E8b30b2C58ed07f9E20001",
+      "nonce": "1",
+      "deadline": "1700000060",
+      "witness": {
+       "to": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+       "validAfter": "0"
+      }
+     },
+     "signature": "0x2222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "payee_mismatch"
+  },
+  {
+   "id": "policy-001",
+   "kind": "policy",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok"
+  },
+  {
+   "id": "policy-002",
+   "kind": "policy",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 0,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "policy_invalid",
+   "note": "windowSecs must be >= 1"
+  },
+  {
+   "id": "policy-003",
+   "kind": "policy",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": 0,
+    "escalation": null
+   },
+   "expect": "policy_invalid",
+   "note": "expiry 0 is invalid on the wire: null means never (\u00a72)"
+  },
+  {
+   "id": "policy-004",
+   "kind": "policy",
+   "policy": {
+    "perTxMax": "1_000",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "policy_invalid",
+   "note": "amount grammar"
+  },
+  {
+   "id": "policy-005",
+   "kind": "policy",
+   "policy": {
+    "perTxMax": "01",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "policy_invalid",
+   "note": "no leading zeros"
+  },
+  {
+   "id": "policy-006",
+   "kind": "policy",
+   "policy": {
+    "perTxMax": "340282366920938463463374607431768211456",
+    "perWindowMax": "340282366920938463463374607431768211456",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "policy_invalid",
+   "note": "2^128: not representable by the reference encodings; a decoder MUST reject"
+  },
+  {
+   "id": "policy-007",
+   "kind": "policy",
+   "policy": {
+    "perTxMax": "0",
+    "perWindowMax": "0",
+    "windowSecs": 1,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok",
+   "note": "zero caps and a one-second window are valid"
+  },
+  {
+   "id": "policy-008",
+   "kind": "policy",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [],
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok",
+   "note": "an empty allow list is valid (and permits no payee)"
+  },
+  {
+   "id": "id-001",
+   "kind": "id",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "5cf4482f2d2381efa8547f4abe7bfb6e83673de6b774f91c6092bf0ff12ad52f"
+  },
+  {
+   "id": "id-002",
+   "kind": "id",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": [
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "denyList": [
+     "0xcccccccccccccccccccccccccccccccccccccccc"
+    ],
+    "expiry": 1000,
+    "escalation": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+   },
+   "expect": "1a38414d7e65bedb2439e4614445fb05851aedd9762762f391389b34b4a720e7",
+   "note": "lists are sorted before hashing"
+  },
+  {
+   "id": "id-003",
+   "kind": "id",
+   "policy": {
+    "perTxMax": "500",
+    "perWindowMax": "2000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": {
+     "scheme": "ed25519",
+     "key": "abababababababababababababababababababababababababababababababab"
+    }
+   },
+   "expect": "11965066ba8f1cd9d743a0e03f80f21c617db52b86bef74a1837121da8e18d2b",
+   "note": "a keyRef co-signer"
+  },
+  {
+   "id": "x402-027",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "1_000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "malformed_payment",
+   "note": "amount grammar: not a canonical decimal string"
+  },
+  {
+   "id": "x402-028",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "permit2Authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "permitted": {
+       "token": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+       "amount": "10000"
+      },
+      "spender": "0xbadbadbadbadbadbadbadbadbadbadbadbadbadb",
+      "nonce": "1",
+      "deadline": "1700000060",
+      "witness": {
+       "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "validAfter": "0"
+      }
+     },
+     "signature": "0x2222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "spender_mismatch",
+   "note": "a Permit2 spender other than the x402 proxy does not honour witness.to"
+  },
+  {
+   "id": "x402-029",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "payer_mismatch",
+   "note": "the evaluator knows which account it is evaluating; the payload's from is someone else",
+   "expectedPayer": "0x2222222222222222222222222222222222222222"
+  },
+  {
+   "id": "x402-030",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "ok",
+   "spend": {
+    "amount": "10000",
+    "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "network": "eip155:84532",
+    "payer": "0x1111111111111111111111111111111111111111"
+   },
+   "note": "expectedPayer matches",
+   "expectedPayer": "0x1111111111111111111111111111111111111111"
+  },
+  {
+   "id": "x402-031",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "value": "9999",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "payee_mismatch",
+   "note": "two faults: payee is checked before amount (\u00a77.2 precedence)"
+  },
+  {
+   "id": "x402-032",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": {
+    "scheme": "exact",
+    "network": "eip155:84532",
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "amount": "10000",
+    "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "maxTimeoutSeconds": 60,
+    "extra": {
+     "name": "USDC",
+     "version": "1"
+    }
+   },
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "requirements_mismatch",
+   "note": "extra is part of what is being paid (it carries the EIP-712 domain)"
+  },
+  {
+   "id": "x402-033",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x0000000000000000000000000000000000000000000000000000000000000000"
+     },
+     "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": {
+    "scheme": "exact",
+    "network": "eip155:84532",
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "amount": "10000",
+    "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "maxTimeoutSeconds": 999,
+    "extra": {
+     "name": "USDC",
+     "version": "2"
+    }
+   },
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "ok",
+   "spend": {
+    "amount": "10000",
+    "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "network": "eip155:84532",
+    "payer": "0x1111111111111111111111111111111111111111"
+   },
+   "note": "maxTimeoutSeconds is not compared"
+  },
+  {
+   "id": "x402-034",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+     "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+     "amount": "10000",
+     "payTo": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "transaction": "AQAAAA=="
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "malformed_payment",
+   "note": "only EVM payload types are bound in 0.1 (\u00a77.2); an SVM payload is out of scope"
+  },
+  {
+   "id": "x402-035",
+   "kind": "x402-exact",
+   "payment": {
+    "x402Version": 2,
+    "accepted": {
+     "scheme": "exact",
+     "network": "eip155:84532",
+     "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+     "amount": "10000",
+     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "maxTimeoutSeconds": 60,
+     "extra": {
+      "name": "USDC",
+      "version": "2"
+     }
+    },
+    "payload": {
+     "authorization": {
+      "from": "0x1111111111111111111111111111111111111111",
+      "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "10000",
+      "validAfter": "0",
+      "validBefore": "1700000060",
+      "nonce": "0x00"
+     },
+     "signature": "0x11"
+    },
+    "resource": {
+     "url": "https://api.example/infer"
+    }
+   },
+   "requirements": null,
+   "chain": [
+    {
+     "perTxMax": "10000",
+     "perWindowMax": "50000",
+     "windowSecs": 3600,
+     "allowList": null,
+     "denyList": [],
+     "expiry": null,
+     "escalation": null
+    }
+   ],
+   "spentInWindow": [
+    "0"
+   ],
+   "now": 1700000000,
+   "escalated": false,
+   "expect": "ok",
+   "spend": {
+    "amount": "10000",
+    "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "network": "eip155:84532",
+    "payer": "0x1111111111111111111111111111111111111111"
+   },
+   "note": "signature, nonce and validity are not the policy's concern"
+  }
+ ]
+}

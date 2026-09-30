@@ -9,7 +9,7 @@ import {MockERC20} from "./MockERC20.sol";
 /// foliant/accounts.py): over random spend times, amounts and window changes, the contract must
 /// never count LESS than the reference (so it can never let more than the cap leave in any
 /// windowSecs interval), and never MORE than the reference plus what the reference counted in the
-/// preceding bucketLen seconds (the documented over-count bound).
+/// preceding bucketLen seconds (the documented over-count bound). The reference is spec §6.1.
 contract WindowFuzzTest is Test {
     AgentAccounts acc;
     MockERC20 usdc;
@@ -17,7 +17,7 @@ contract WindowFuzzTest is Test {
     address signer = makeAddr("signer");
     address payee = makeAddr("payee");
 
-    uint64[] ts;      // the reference's live entries (pruned like SpendWindow)
+    uint64[] ts;      // the reference's live entries (pruned as SpendWindow prunes)
     uint256[] amt;
     uint64[] allTs;   // everything ever recorded, for the upper bound
     uint256[] allAmt;
@@ -28,8 +28,10 @@ contract WindowFuzzTest is Test {
         p.windowSecs = w;
     }
 
-    /// SpendWindow.spent from the reference: entries at or before the cutoff are dropped for good
-    /// (so lengthening a window later does not resurrect them), the rest are summed.
+    /// Spec §6.1: a spend counts unless it has aged out under a window in force at any time since
+    /// it was recorded. With a piecewise-constant window that is: prune under the old window at
+    /// each change (the caller does this before switching), prune under the current window at
+    /// evaluation, and never bring a pruned entry back (SpendWindow in the Python reference).
     function _exact(uint256 now_, uint256 w) internal returns (uint256 total) {
         uint256 cutoff = now_ > w ? now_ - w : 0;
         uint256 k = 0;
@@ -74,6 +76,7 @@ contract WindowFuzzTest is Test {
             if (uint256(r) % 7 == 0) {
                 // administrator changes the window mid-sequence (both directions)
                 uint32 nw = (i % 2 == 0) ? wAlt : w;
+                if (nw != w) _exact(t, w); // §6.1: what has aged out under the old window stays out
                 vm.prank(owner);
                 acc.setPolicy(id, _policy(nw));
                 if (nw != w) changes++;

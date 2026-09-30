@@ -23,6 +23,15 @@ from .crypto import KeyPair, PublicKey, Signed, hash_obj, sign
 from .errors import PolicyViolation
 
 
+MAX_WINDOW_SECS = 30 * 86400  # this reference bounds windowSecs (spec §2); the EVM reference accepts any uint32
+UINT128_MAX = (1 << 128) - 1
+
+
+def canonical_address(a: str) -> str:
+    """Spec §2.1: EVM addresses compare in lowercase hex; other address forms as given."""
+    return a.lower() if a.startswith("0x") or a.startswith("0X") else a
+
+
 @dataclass
 class Policy:
     per_tx_max: int
@@ -33,9 +42,68 @@ class Policy:
     expiry: Optional[int] = None  # unix seconds; None = never
     escalation: Optional[PublicKey] = None  # co-signer that may exceed per_tx_max
 
+    def __post_init__(self) -> None:
+        """Reject a policy the spec calls invalid (§2) and canonicalise its lists (§2.1)."""
+        for name in ("per_tx_max", "per_window_max"):
+            v = getattr(self, name)
+            if not isinstance(v, int) or isinstance(v, bool) or v < 0 or v > UINT128_MAX:
+                raise PolicyViolation(f"{name} must be an integer in [0, 2^128)", "policy_invalid")
+        if not isinstance(self.window_secs, int) or isinstance(self.window_secs, bool) \
+                or self.window_secs < 1 or self.window_secs > MAX_WINDOW_SECS:
+            raise PolicyViolation(f"window_secs must be in [1, {MAX_WINDOW_SECS}]", "policy_invalid")
+        if self.expiry is not None and (not isinstance(self.expiry, int) or isinstance(self.expiry, bool) or self.expiry < 1):
+            raise PolicyViolation("expiry must be null or an integer >= 1", "policy_invalid")
+        if self.allow_list is not None:
+            self.allow_list = frozenset(canonical_address(a) for a in self.allow_list)
+        self.deny_list = frozenset(canonical_address(a) for a in self.deny_list)
+
     @property
     def id(self) -> str:
+        """Id of this policy as this reference encodes it in envelopes (`to_dict`). For the
+        specification's wire-form id see `spec_id`."""
         return hash_obj(self.to_dict())
+
+    def wire(self) -> dict:
+        """The policy in the specification's wire form (spending-policy.md §2): camelCase keys,
+        amounts as decimal strings, lists sorted, null fields present."""
+        esc = self.escalation
+        return {
+            "perTxMax": str(self.per_tx_max),
+            "perWindowMax": str(self.per_window_max),
+            "windowSecs": self.window_secs,
+            "allowList": sorted(self.allow_list) if self.allow_list is not None else None,
+            "denyList": sorted(self.deny_list),
+            "expiry": self.expiry,
+            "escalation": esc.to_dict() if isinstance(esc, PublicKey) else esc,
+        }
+
+    @property
+    def spec_id(self) -> str:
+        """Spec §2.2: SHA-256 of the canonical encoding of the wire form."""
+        return hash_obj(self.wire())
+
+    @classmethod
+    def from_wire(cls, d: dict) -> "Policy":
+        """Parse the specification's wire form. Amount strings must match the spec's uint grammar."""
+        import re
+        try:
+            for k in ("perTxMax", "perWindowMax"):
+                if not isinstance(d[k], str) or not re.fullmatch(r"0|[1-9][0-9]*", d[k]):
+                    raise PolicyViolation(f"{k} must be a decimal string", "policy_invalid")
+            esc = d["escalation"]
+            if isinstance(esc, dict):
+                esc = PublicKey.from_dict(esc)
+            return cls(
+                per_tx_max=int(d["perTxMax"]),
+                per_window_max=int(d["perWindowMax"]),
+                window_secs=d["windowSecs"],
+                allow_list=frozenset(d["allowList"]) if d["allowList"] is not None else None,
+                deny_list=frozenset(d["denyList"]),
+                expiry=d["expiry"],
+                escalation=esc,
+            )
+        except (KeyError, TypeError) as e:
+            raise PolicyViolation(f"malformed policy: {e}", "policy_invalid")
 
     def to_dict(self) -> dict:
         return {
@@ -70,20 +138,22 @@ class Policy:
         escalated: bool = False,
     ) -> None:
         """Raise PolicyViolation if a payment of `amount` to `payee` is not allowed."""
+        payee = canonical_address(payee)
         if amount < 0:
-            raise PolicyViolation("negative amount")
+            raise PolicyViolation("negative amount", "negative_amount")
         if self.expiry is not None and now >= self.expiry:
-            raise PolicyViolation("policy expired")
+            raise PolicyViolation("policy expired", "expired")
         if payee in self.deny_list:
-            raise PolicyViolation(f"payee {payee} is denied")
+            raise PolicyViolation(f"payee {payee} is denied", "payee_denied")
         if self.allow_list is not None and payee not in self.allow_list:
-            raise PolicyViolation(f"payee {payee} is not on the allow list")
+            raise PolicyViolation(f"payee {payee} is not on the allow list", "payee_not_allowed")
         if amount > self.per_tx_max and not escalated:
-            raise PolicyViolation(f"amount {amount} exceeds per_tx_max {self.per_tx_max}")
+            raise PolicyViolation(f"amount {amount} exceeds per_tx_max {self.per_tx_max}", "per_tx_exceeded")
         if spent_in_window + amount > self.per_window_max:
             raise PolicyViolation(
                 f"amount {amount} would exceed per_window_max {self.per_window_max} "
-                f"(already spent {spent_in_window})"
+                f"(already spent {spent_in_window})",
+                "per_window_exceeded",
             )
 
     def within(self, parent: "Policy") -> None:
@@ -99,15 +169,15 @@ class Policy:
         see Ledger._authorise).
         """
         if self.per_tx_max > parent.per_tx_max:
-            raise PolicyViolation(f"child per_tx_max {self.per_tx_max} exceeds parent {parent.per_tx_max}")
+            raise PolicyViolation(f"child per_tx_max {self.per_tx_max} exceeds parent {parent.per_tx_max}", "child_per_tx_wider")
         if self.per_window_max > parent.per_window_max:
-            raise PolicyViolation(f"child per_window_max {self.per_window_max} exceeds parent {parent.per_window_max}")
+            raise PolicyViolation(f"child per_window_max {self.per_window_max} exceeds parent {parent.per_window_max}", "child_per_window_wider")
         if parent.allow_list is not None and (self.allow_list is None or not self.allow_list <= parent.allow_list):
-            raise PolicyViolation("child allow list must be a subset of the parent's")
+            raise PolicyViolation("child allow list must be a subset of the parent's", "child_allow_wider")
         if not parent.deny_list <= self.deny_list:
-            raise PolicyViolation("child deny list must include the parent's")
+            raise PolicyViolation("child deny list must include the parent's", "child_deny_narrower")
         if parent.expiry is not None and (self.expiry is None or self.expiry > parent.expiry):
-            raise PolicyViolation("child expiry must not be later than the parent's")
+            raise PolicyViolation("child expiry must not be later than the parent's", "child_expiry_later")
 
 
 @dataclass(frozen=True)
@@ -138,7 +208,15 @@ class Attestation:
 
 @dataclass
 class SpendWindow:
-    """Rolling record of value the account has committed, for per_window_max."""
+    """Rolling record of value the account has committed, for per_window_max.
+
+    Spec §6.1: a spend recorded at t counts at `now` unless it has aged out under a window in
+    force at any time since t. Because the window is piecewise constant, that is decided by
+    pruning under the old window at each window change (`rewindow`) and under the current
+    window at evaluation (`spent`); pruning is permanent, so a later, longer window never
+    brings a dropped spend back. The result depends only on the log and the policy history,
+    never on when `spent` happened to be called.
+    """
 
     entries: list[tuple[int, int]] = field(default_factory=list)  # (ts, amount)
 
@@ -146,6 +224,10 @@ class SpendWindow:
         cutoff = now - window_secs
         self.entries = [(t, a) for t, a in self.entries if t > cutoff]
         return sum(a for _, a in self.entries)
+
+    def rewindow(self, now: int, old_window_secs: int) -> None:
+        """Call at the moment the window length changes, with the length that has been in force."""
+        self.spent(now, old_window_secs)
 
     def record(self, now: int, amount: int) -> None:
         self.entries.append((now, amount))
@@ -201,6 +283,12 @@ class AgentSigner:
     @property
     def public(self) -> PublicKey:
         return self.keypair.public
+
+    def set_policy(self, policy: Policy, now: int) -> None:
+        """Replace the policy (an administrator changed it); spec §6.1 prunes under the old window first."""
+        if policy.window_secs != self.policy.window_secs:
+            self.window.rewindow(now, self.policy.window_secs)
+        self.policy = policy
 
     def sign_payment(self, *, payee: str, amount: int, now: int, body: dict, escalated: bool = False) -> Signed:
         """Sign `body` if committing `amount` to `payee` is within policy."""

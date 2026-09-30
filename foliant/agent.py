@@ -31,10 +31,14 @@ class Agent:
         return self.signer.sign_plain(body)
 
     def submit(self, op: str, escalate_with: Optional[KeyPair] = None, *,
-               spend: int = 0, payee_addr: str = "", **params) -> dict:
+               spend: int = 0, payee_addr: str = "", escalation_deadline: Optional[int] = None,
+               **params) -> dict:
         """Sign and apply an envelope. Value-moving ops pass `spend`/`payee_addr` so the
-        signer runs the same policy check the ledger will run."""
+        signer runs the same policy check the ledger will run. An escalated envelope carries
+        a deadline the co-signer signs (default: five minutes from now)."""
         body = {"account": self.account.id, "nonce": self.account.nonce, "op": op, **params}
+        if escalate_with is not None:
+            body["escalation_deadline"] = escalation_deadline if escalation_deadline is not None else self.ledger.now + 300
         snapshot = list(self.signer.window.entries)
         if spend or payee_addr:
             env = self.signer.sign_payment(payee=payee_addr, amount=spend, now=self.ledger.now, body=body,
@@ -67,7 +71,7 @@ class Agent:
         """An ancestor's signer sets a descendant's policy; the child's signer must be told."""
         body = {"account": child.account.id, "nonce": child.account.nonce, "op": "set_policy", "policy": policy.to_dict()}
         res = self.ledger.apply(self.signer.sign_plain(body))
-        child.signer.policy = policy
+        child.signer.set_policy(policy, self.ledger.now)
         return res
 
     @classmethod

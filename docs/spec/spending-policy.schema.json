@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foliant.dev/spec/spending-policy-0.1.schema.json",
+  "title": "Agent Spending Policy (draft 0.1)",
+  "description": "A per-account spending policy as specified in spending-policy.md. Amounts are decimal strings in the smallest unit of the asset. Addresses are canonical strings (EVM: 0x + 40 lowercase hex digits).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "perTxMax",
+    "perWindowMax",
+    "windowSecs",
+    "allowList",
+    "denyList",
+    "expiry",
+    "escalation"
+  ],
+  "properties": {
+    "perTxMax": {
+      "$ref": "#/$defs/uint"
+    },
+    "perWindowMax": {
+      "$ref": "#/$defs/uint"
+    },
+    "windowSecs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "allowList": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/address"
+          },
+          "uniqueItems": true
+        }
+      ]
+    },
+    "denyList": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/address"
+      },
+      "uniqueItems": true
+    },
+    "expiry": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        }
+      ],
+      "description": "null = never. 0 is invalid on the wire (spec \u00a72)."
+    },
+    "escalation": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/address"
+        },
+        {
+          "$ref": "#/$defs/keyRef"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "uint": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "description": "Unsigned integer as a decimal string: no sign, no leading zeros, ASCII digits. Binary encodings that cannot represent the value MUST reject it (spec \u00a72)."
+    },
+    "address": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Canonical address string. EVM: ^0x[0-9a-f]{40}$, never the zero address as an escalation co-signer. Other chains define their own canonical form."
+    },
+    "keyRef": {
+      "type": "object",
+      "description": "A public key reference for implementations that identify the escalation co-signer by key rather than address (the Python reference).",
+      "required": [
+        "scheme",
+        "key"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "scheme": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -166,6 +166,11 @@ class Ledger:
                 raise Unauthorized("escalation signature not from the policy's escalation key")
             if not escalation.valid() or escalation.body != b:
                 raise InvalidSignatureError("escalation must sign the same body")
+            # spec §5: the co-signature binds the exact spend (the body), a replay guard (the
+            # account nonce, checked above and advanced below) and a deadline
+            dl = b.get("escalation_deadline")
+            if not isinstance(dl, int) or isinstance(dl, bool) or self.now > dl:
+                raise Unauthorized("escalation needs an unexpired escalation_deadline in the body")
             escalated = True
         handler = getattr(self, f"_op_{op}", None)
         if handler is None:
@@ -247,6 +252,8 @@ class Ledger:
         policy = Policy.from_dict(b["policy"])
         if acct.parent is not None:
             policy.within(self._account(acct.parent).policy)
+        if policy.window_secs != acct.policy.window_secs:
+            acct.window.rewindow(self.now, acct.policy.window_secs)  # spec §6.1
         acct.policy = policy
         return {"ok": True}
 

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foliant.dev/spec/spending-policy-extension-0.1.schema.json",
+  "title": "x402 `spending-policy` extension (draft 0.1)",
+  "description": "Declared by a resource server in PaymentRequired.extensions[\"spending-policy\"] and echoed by the client in PaymentPayload.extensions[\"spending-policy\"] with info.account added (spending-policy.md \u00a77.2). The facilitator maps the payload's payer address to the account through the registry and never trusts info.account alone.",
+  "type": "object",
+  "required": [
+    "info",
+    "schema"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "info": {
+      "type": "object",
+      "required": [
+        "registry"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "registry": {
+          "type": "string",
+          "description": "Where the account tree lives: a CAIP-2 network id and a contract address (eip155:43113:0xDB69...), or a URL of a policy service.",
+          "minLength": 1
+        },
+        "account": {
+          "type": "string",
+          "description": "Client-supplied: the id of the paying account in the registry. Advisory; the facilitator verifies it against the payer address.",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "const": "0.1"
+        }
+      }
+    },
+    "schema": {
+      "type": "object",
+      "description": "The JSON schema of info, as x402 extensions carry it."
+    }
+  }
+}

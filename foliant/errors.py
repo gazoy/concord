@@ -3,7 +3,12 @@ class FoliantError(Exception):
 
 
 class PolicyViolation(FoliantError):
-    pass
+    """A policy check failed. `code` is the stable reason code from the spending-policy
+    specification (docs/spec/spending-policy.md §3); the message is for humans."""
+
+    def __init__(self, message: str, code: str = "policy_violation"):
+        super().__init__(message)
+        self.code = code
 
 
 class InvalidSignatureError(FoliantError):
