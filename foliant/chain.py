@@ -466,7 +466,12 @@ class ChainGate:
         def __enter__(self):
             if self.path is not None:
                 self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
-                fcntl.flock(self.fd, fcntl.LOCK_EX)
+                try:
+                    fcntl.flock(self.fd, fcntl.LOCK_EX)
+                except BaseException:  # ENOLCK, an interrupting signal: close the fd rather than leak
+                    os.close(self.fd)  # one per request until the process runs out of them (F-9)
+                    self.fd = None
+                    raise
             return self
 
         def __exit__(self, *exc):

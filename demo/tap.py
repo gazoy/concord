@@ -8,8 +8,11 @@ FOLIANT_TAP_PER_HOUR attempts an hour and FOLIANT_TAP_PER_DAY a day from everyon
 FOLIANT_TAP_PER_CLIENT_DAY a day per client (the caller's IP, stored only as a sha256 hash), so
 one visitor looping over fresh addresses cannot lock everyone else out (F-1). All of these are
 charged *before* anything is broadcast and persisted, so a failed or slow transaction cannot be
-retried for free; only externally-owned recipients (a contract could reject the value after gas
-is spent); the mint goes first (it fails at estimateGas, spending nothing) and the AVAX second;
+retried for free — an RPC failure between the charge and the first broadcast therefore costs the
+visitor nothing but does consume one hourly/daily slot, which is the price of never funding an
+address twice (F-11); only externally-owned recipients that can actually receive a plain 21,000-gas
+transfer (a contract could reject the value after gas is spent, and a precompile burns it, F-8);
+the mint goes first (it fails at estimateGas, spending nothing) and the AVAX second;
 receipts are waited for with a short timeout; and the tap refuses cleanly (503, nothing charged)
 when its own wallet cannot cover what it is about to send. State is one JSON file guarded by a
 lock file held for the whole attempt, so two instances over one directory cannot both fund an
@@ -42,9 +45,11 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import requests
 from eth_account import Account
 from web3 import Web3
-from web3.exceptions import ContractCustomError, ContractLogicError, TimeExhausted, Web3RPCError
+from web3.exceptions import (ContractCustomError, ContractLogicError, TimeExhausted, Web3Exception,
+                             Web3RPCError)
 
 from foliant.chain import ChainLedger
 
@@ -52,6 +57,11 @@ RECEIPT_TIMEOUT = 60  # seconds; Fuji blocks are ~2 s, so this is a stuck transa
 RECEIPT_POLL = 2      # seconds between receipt polls: one per block, not ten (F-4)
 GAS_HEADROOM = 1.25   # over the node's gas price, so a fee rise between quote and inclusion does not strand us
 DAY = 86400
+STATE_VERSION = 1     # written since F-6; a file without it is the older shape and loads as version 1
+BALANCE_CACHE = 30    # seconds status() trusts a balance figure for (give() never uses it, F-5)
+BALANCE_RETRY = 5     # seconds status() waits before asking again after a failed balance read (F-7)
+# a transport or JSON-RPC failure, as opposed to a bug of ours: only these become "chain unavailable" (F-11)
+RPC_ERRORS = (Web3Exception, requests.RequestException, ConnectionError, TimeoutError)
 
 
 class TapError(Exception):
@@ -92,7 +102,8 @@ class Tap:
         self._recent: list[float] = []     # attempt times in the last day (the hour is a slice of it)
         self._clients: dict[str, list[float]] = {}  # sha256(client) -> attempt times in the last day (F-1)
         self._stuck: Optional[dict] = None  # {nonce, hash, since} of an unconfirmed transaction of ours (F-3)
-        self._balance_cache: tuple[float, int] = (0.0, 0)
+        self._balance_cache: tuple[float, Optional[int]] = (0.0, None)  # for status() only (F-5)
+        self._balance_retry_at = 0.0  # while in the future, status() does not retry a failed read (F-7)
         self._given_count = 0  # for status(): reported without taking the locks (TAP-REVIEW R2-3)
         with self._file_lock():
             self._load()
@@ -105,16 +116,32 @@ class Tap:
     def balance(self) -> int:
         return self.L.w3.eth.get_balance(self.key.address)
 
-    def _cached_balance(self, max_age: float = 30) -> int:
+    def _cached_balance(self) -> Optional[int]:
+        """status()'s balance figure. give() never reads this: a stale-high figure there would let the
+        mint go and the AVAX send fail (F-5). When the read itself fails, the last known figure (or None)
+        is returned and the failure is remembered for a few seconds, so an RPC outage does not turn every
+        GET /chain into a retrying call that ties up a threadpool thread (F-7)."""
+        now = time.time()
         t, b = self._balance_cache
-        if time.time() - t > max_age:
+        if now - t <= BALANCE_CACHE or now < self._balance_retry_at:
+            return b
+        try:
             b = self.balance()
-            self._balance_cache = (time.time(), b)
+        except Exception:  # noqa: BLE001  /chain is the address-discovery endpoint: it must not 500
+            self._balance_retry_at = now + BALANCE_RETRY
+            return b
+        self._balance_cache = (now, b)
         return b
+
+    def _invalidate_balance(self) -> None:
+        """Our own spending moved the balance, so status() must ask again (R3-1); the figure is kept as
+        the last known one for the outage path above."""
+        self._balance_cache = (0.0, self._balance_cache[1])
 
     def status(self) -> dict:
         """For GET /chain. Nothing here takes a lock or waits on a give in progress; the balance is
-        cached for 30 s and the count is this instance's last known figure."""
+        cached for 30 s (null if it has never been read and the RPC is down, F-7) and the count is this
+        instance's last known figure."""
         return {"tap": self.key.address, "balanceWei": self._cached_balance(), "avaxWei": self.avax_wei,
                 "tokens": self.tokens, "perHour": self.per_hour, "given": self._given_count}
 
@@ -133,7 +160,8 @@ class Tap:
                 return self._give_locked(to, hashlib.sha256(client.encode()).hexdigest())
         except TapError:
             raise
-        except Exception as e:  # noqa: BLE001  an RPC failure in the pre-checks: nothing was charged
+        except RPC_ERRORS as e:  # an RPC failure in the pre-checks: nothing was charged. Only transport
+            # and JSON-RPC errors are reported this way; a bug of ours is not "chain unavailable" (F-11)
             raise TapError(502, f"chain unavailable: {type(e).__name__}") from None
         finally:
             self._lock.release()
@@ -158,8 +186,23 @@ class Tap:
             raise TapError(400, "the address is a contract; the tap funds externally-owned addresses only")
         gas_price = int(w3.eth.gas_price * GAS_HEADROOM)
         need = self.avax_wei + gas_price * (21_000 + 80_000)  # the transfer and the mint, with headroom
-        if self._cached_balance() < need and self._cached_balance(0) < need:
+        if self.balance() < need:  # read fresh: status()'s cache may be stale-high (F-5)
             raise TapError(503, "the tap is dry; it will be refilled")
+        if self.avax_wei:
+            # get_code passes anything without bytecode, which includes the precompiles: a plain
+            # 21,000-gas transfer to one of those burns the gas and delivers nothing (F-8). Ask the node
+            # what the transfer would cost and run it as a call, before the attempt is charged, so a
+            # recipient that cannot receive one is refused without spending a slot or any gas.
+            probe = {"from": self.key.address, "to": to, "value": self.avax_wei}
+            try:
+                gas = w3.eth.estimate_gas(probe)
+                w3.eth.call({**probe, "gas": 21_000})  # some nodes answer 21,000 without simulating
+            except (ContractCustomError, ContractLogicError, Web3RPCError):
+                raise TapError(400, "the address cannot receive a plain transfer (a precompile?); "
+                                    "the tap funds externally-owned addresses only") from None
+            if gas != 21_000:
+                raise TapError(400, f"a plain transfer to the address costs {gas} gas, not 21000; "
+                                    "the tap funds externally-owned addresses only")
         latest = w3.eth.get_transaction_count(self.key.address, "latest")
         pending = w3.eth.get_transaction_count(self.key.address, "pending")
         if self._stuck and (self._stuck["nonce"] < latest or pending == latest):
@@ -178,7 +221,13 @@ class Tap:
         self._given[key] = "pending"
         self._recent.append(now)
         self._clients.setdefault(client_key, []).append(now)
-        self._save()
+        try:
+            self._save()
+        except OSError:  # the charge is not on disk, so do not keep it in memory either: undo it and
+            self._given.pop(key, None)              # refuse, rather than stranding the address as spent
+            self._recent.pop()                      # for the life of this process with nothing broadcast
+            self._clients[client_key].pop()         # (F-6, B-5)
+            raise TapError(503, f"tap state not writable: {self._path.name}") from None
         txs: list[str] = []
         broadcast = False  # anything may be in flight
         sent = 0           # confirmed sends
@@ -201,7 +250,7 @@ class Tap:
         except NotBroadcast as e:
             # the node refused the transaction (insufficient funds, say): if nothing of ours was broadcast
             # before it the address is released; if the mint already went, the address is spent
-            self._balance_cache = (0.0, 0)
+            self._invalidate_balance()
             if sent:  # the mint went; this address has had its attempt
                 self._given[key] = f"failed:{e}"
             else:
@@ -215,7 +264,7 @@ class Tap:
         except Unconfirmed as e:
             # broadcast but not mined in time: the visitor may still get it, so the record says so rather
             # than "failed", and the stuck transaction is remembered so later refusals can name it (F-3)
-            self._balance_cache = (0.0, 0)
+            self._invalidate_balance()
             self._given[key] = f"unconfirmed:{e.tx_hash}"
             self._stuck = {"nonce": e.nonce, "hash": e.tx_hash, "since": time.time()}
             self._given_count = len(self._given)
@@ -225,7 +274,7 @@ class Tap:
                 pass
             raise
         except Exception as e:  # noqa: BLE001
-            self._balance_cache = (0.0, 0)  # whatever happened, our balance may have moved (R3-1)
+            self._invalidate_balance()  # whatever happened, our balance may have moved (R3-1)
             err = e if isinstance(e, TapError) else TapError(502, f"funding failed: {type(e).__name__}")
             if broadcast:
                 self._given[key] = f"failed:{err}"
@@ -237,7 +286,7 @@ class Tap:
             except OSError:
                 pass  # the original error is the one to report; the in-memory state is still right
             raise err from None
-        self._balance_cache = (0.0, 0)
+        self._invalidate_balance()
         self._given[key] = "funded"
         self._save()
         self._given_count = len(self._given)
@@ -249,6 +298,11 @@ class Tap:
     def _recipient(address) -> str:
         if not isinstance(address, str) or not Web3.is_address(address):
             raise TapError(400, "address must be an EVM address")
+        # is_address also accepts bare hex and a 0X prefix; slicing [2:] blindly then ate two nibbles of
+        # a bare address and reported it as a bad checksum. Require the prefix, normalise its case (F-10)
+        if address[:2].lower() != "0x":
+            raise TapError(400, "address must be given with its 0x prefix")
+        address = "0x" + address[2:]
         hexpart = address[2:]
         if hexpart != hexpart.lower() and hexpart != hexpart.upper() and not Web3.is_checksum_address(address):
             raise TapError(400, "address has a bad checksum (a typo?); give it in lowercase to skip the check")
@@ -293,6 +347,10 @@ class Tap:
                 os.close(self.fd)
                 self.fd = None
                 raise TapError(503, "the tap is serving someone else; retry in a few seconds") from None
+            except BaseException:  # ENOLCK, an interrupting signal: close the fd rather than leak
+                os.close(self.fd)  # one per request until the process runs out of them (F-9)
+                self.fd = None
+                raise
             return self
 
         def __exit__(self, *exc):
@@ -304,24 +362,52 @@ class Tap:
         return self._FileLock(self._path, blocking)
 
     def _load(self) -> None:
-        if self._path.exists():
-            try:
-                saved = json.loads(self._path.read_text())
-            except ValueError:  # a corrupt file: fail closed, recover by hand (the error names the file)
-                raise TapError(503, f"tap state file unreadable: {self._path.name}") from None
-            self._given = dict(saved.get("given", {}))
-            self._recent = [float(t) for t in saved.get("recent", [])]
-            self._clients = {c: [float(t) for t in ts] for c, ts in saved.get("clients", {}).items()}
-            self._stuck = saved.get("stuck") or None
-            self._given_count = len(self._given)
+        """Read the state file, or start from nothing when it is absent. Anything that is not the shape
+        we write is a corrupt file: fail closed with a 503 naming it, rather than silently serving a
+        half-understood state or crashing the whole server (F-6)."""
+        if not self._path.exists():
+            # deleted under a running server, say: that resets the tap, rather than the next _save()
+            # re-creating the file from whatever this instance still held in memory (F-6)
+            self._given, self._recent, self._clients, self._stuck, self._given_count = {}, [], {}, None, 0
+            return
+        try:
+            saved = json.loads(self._path.read_text())
+            if not isinstance(saved, dict):
+                raise TypeError("the state file is not a JSON object")
+            if saved.get("version", STATE_VERSION) != STATE_VERSION:  # written since F-6; older files have none
+                raise ValueError(f"unknown state file version {saved.get('version')!r}")
+            given, recent = saved.get("given", {}), saved.get("recent", [])
+            clients, stuck = saved.get("clients", {}), saved.get("stuck") or None
+            if not isinstance(given, dict) or not all(isinstance(k, str) and isinstance(v, str)
+                                                      for k, v in given.items()):
+                raise TypeError("'given' must be an object of address -> record")
+            if not isinstance(recent, list) or not isinstance(clients, dict):
+                raise TypeError("'recent' must be a list and 'clients' an object")
+            if stuck is not None and not (isinstance(stuck, dict) and {"nonce", "hash", "since"} <= set(stuck)):
+                raise TypeError("'stuck' must be {nonce, hash, since}")
+            recent = [float(t) for t in recent]
+            clients = {c: [float(t) for t in ts] for c, ts in clients.items()}
+        except (ValueError, TypeError, AttributeError, OSError) as e:
+            raise TapError(503, f"tap state file unreadable: {self._path.name} ({type(e).__name__}: {e})") from None
+        # assigned only once everything parsed, so a corrupt file never half-replaces good state
+        self._given, self._recent, self._clients, self._stuck = dict(given), recent, clients, stuck
+        self._given_count = len(self._given)
 
     def _save(self) -> None:
         fd, tmp = tempfile.mkstemp(prefix=self._path.name, dir=self._path.parent)
-        with os.fdopen(fd, "w") as f:
-            json.dump({"given": self._given, "recent": self._recent, "clients": self._clients, "stuck": self._stuck}, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, self._path)
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump({"version": STATE_VERSION, "given": self._given, "recent": self._recent,
+                           "clients": self._clients, "stuck": self._stuck}, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self._path)
+        except BaseException:  # no temp-file litter behind a failed write (F-6)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
 
 def tap_from_env(ledger: ChainLedger, env=os.environ) -> Optional[Tap]:

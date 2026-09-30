@@ -3,7 +3,10 @@ recipients refused, failures after broadcast leave the address spent, two instan
 directory agree, and the HTTP layer behaves (404 without a key, 400 on bad input, non-blocking); then the
 TAP-AUDIT-FINAL fixes: per-client and daily caps (F-1), a send whose retry errors while the transaction is
 in the pool counts as broadcast (F-2), stuck transactions are recorded and named (F-3), receipts are polled
-every 2 s (F-4)."""
+every 2 s (F-4); and the "can wait" set: give() never trusts status()'s balance cache (F-5), the state file
+is validated and never takes the server down (F-6), /chain survives a balance RPC failure (F-7), recipients
+that cannot receive a plain transfer are refused before the charge (F-8), the file locks do not leak a
+descriptor (F-9), addresses must carry their 0x prefix (F-10), and bodies over 1 KiB are refused (F-11)."""
 from __future__ import annotations
 
 import json
@@ -474,3 +477,224 @@ def test_receipt_poll_latency(chain, tmp_path, monkeypatch):
     monkeypatch.setattr(L.w3.eth, "wait_for_transaction_receipt", spy)
     assert tap.give(Account.create().address, "test")["transactions"]
     assert len(seen) == 2 and all(kw.get("poll_latency") == 2 for kw in seen), seen
+
+
+# ---------------------------------------------------------------- TAP-AUDIT-FINAL fixes F-5 .. F-11
+
+
+def _state_file(chain, tmp_path):
+    L, _, _ = chain
+    return tmp_path / f"foliant-tap-{L.chain_id}-{Account.from_key(TAP_KEY).address.lower()}.json"
+
+
+def test_stale_balance_cache_cannot_mislead_give(chain, tmp_path, monkeypatch):
+    """F-5 (A-7): the 30 s balance figure serves status() only. A stale-high one — left by this
+    instance's own /chain, or by a second instance spending the same wallet — must not let give() mint
+    and then fail the AVAX transfer: give() reads the balance fresh on every attempt."""
+    from demo.tap import TapError
+    L, addrs, _ = chain
+    bal = L.w3.eth.get_balance(Account.from_key(TAP_KEY).address)
+    tap = _tap(chain, tmp_path, avax_wei=bal + 1)     # more than the wallet holds
+    tap._balance_cache = (time.time(), bal * 100)     # what a stale status() read leaves behind
+    visitor = Account.create().address
+    with pytest.raises(TapError) as e:
+        tap.give(visitor, "test")
+    assert e.value.status == 503 and "dry" in str(e.value)
+    assert tap.status()["given"] == 0
+    assert L.token(addrs["token"]).functions.balanceOf(visitor).call() == 0  # no mint was broadcast
+    ok = _tap(chain, tmp_path)                        # and a healthy give asks the chain, not the cache
+    ok._balance_cache = (time.time(), bal * 100)
+    reads = []
+    real = L.w3.eth.get_balance
+    monkeypatch.setattr(L.w3.eth, "get_balance", lambda *a, **k: (reads.append(a), real(*a, **k))[1])
+    assert ok.give(Account.create().address, "test")["transactions"]
+    assert reads, "give() trusted status()'s cached balance"
+
+
+def test_bad_state_file_fails_closed(chain, tmp_path):
+    """F-6 (A-5 = B-4): only the shape we write is a state file. Anything else is corruption: refuse
+    with a 503 naming the file rather than serving a half-understood state."""
+    from demo.tap import TapError
+    tap = _tap(chain, tmp_path)
+    tap.give(Account.create().address, "test")
+    p = _state_file(chain, tmp_path)
+    for bad in ("not json at all", "[1, 2, 3]", '"a string"', '{"given": [1]}', '{"given": {"0xa": 5}}',
+                '{"recent": "soon"}', '{"clients": {"x": 3}}', '{"recent": ["soon"]}',
+                '{"stuck": {"nonce": 1}}', '{"version": 99}'):
+        p.write_text(bad)
+        with pytest.raises(TapError) as e:  # a fresh instance will not start on it
+            _tap(chain, tmp_path)
+        assert e.value.status == 503 and p.name in str(e.value), bad
+        with pytest.raises(TapError) as e:  # nor does a running one serve from memory
+            tap.give(Account.create().address, "test")
+        assert e.value.status == 503 and p.name in str(e.value), bad
+
+
+def test_absent_state_file_resets_the_tap(chain, tmp_path):
+    """F-6: deleting the file under a running server resets it, rather than the next write re-creating
+    it from whatever this instance still held in memory."""
+    from demo.tap import TapError
+    tap = _tap(chain, tmp_path, per_hour=2)
+    tap.give(Account.create().address, "test")
+    tap.give(Account.create().address, "test")
+    with pytest.raises(TapError) as e:
+        tap.give(Account.create().address, "test")
+    assert e.value.status == 429
+    _state_file(chain, tmp_path).unlink()
+    assert tap.give(Account.create().address, "test")["transactions"]
+    assert tap.status()["given"] == 1 and len(_state(tmp_path)["recent"]) == 1
+
+
+def test_old_format_state_file_loads(chain, tmp_path):
+    """F-6: "version" is written now, but a file from before it must still load and still be believed."""
+    from demo.tap import TapError
+    old = Account.create().address.lower()
+    _state_file(chain, tmp_path).write_text(json.dumps({"given": {old: "funded"}, "recent": [time.time()]}))
+    tap = _tap(chain, tmp_path)
+    assert tap.status()["given"] == 1
+    with pytest.raises(TapError) as e:
+        tap.give(old, "test")
+    assert e.value.status == 429                      # the old record still spends the address
+    assert tap.give(Account.create().address, "test")["transactions"]
+    s = _state(tmp_path)
+    assert s["version"] == 1 and len(s["recent"]) == 2  # upgraded in place on the next write
+
+
+def test_unwritable_state_at_the_charge_point_releases_the_address(chain, tmp_path, monkeypatch):
+    """F-6 (B-5): when the charge cannot be persisted nothing is broadcast, so the address must not be
+    left spent in this instance's memory for the life of the process."""
+    from demo.tap import TapError
+    L, addrs, _ = chain
+    tap = _tap(chain, tmp_path)
+    visitor = Account.create().address
+    real_save = tap._save
+
+    def enospc():
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(tap, "_save", enospc)
+    with pytest.raises(TapError) as e:
+        tap.give(visitor, "test")
+    assert e.value.status == 503 and "not writable" in str(e.value)
+    monkeypatch.setattr(tap, "_save", real_save)
+    assert tap.status()["given"] == 0
+    assert L.token(addrs["token"]).functions.balanceOf(visitor).call() == 0
+    assert tap.give(visitor, "test")["transactions"]  # released, not stranded
+    assert len(_state(tmp_path)["recent"]) == 1       # and the refusal took no hourly slot
+
+
+def test_make_app_survives_a_broken_tap(chain, tmp_path):
+    """F-6: the tap is optional, so a state file it cannot read disables it and leaves the rest of the
+    server up; without this, /infer went down with an optional feature."""
+    from fastapi.testclient import TestClient
+    d = tmp_path / "broken"
+    d.mkdir()
+    _state_file(chain, d).write_text("{oops")
+    c = TestClient(_app(chain, d))
+    assert c.get("/chain").json()["tap"] is None
+    assert c.post("/tap", json={"address": Account.create().address}).status_code == 404
+    assert c.post("/infer", content=b"hello").status_code == 402  # the paid endpoint is still served
+    assert c.get("/health").json()["ok"] is True
+
+
+def test_chain_endpoint_survives_a_balance_rpc_failure(chain, tmp_path, monkeypatch):
+    """F-7 (A-6 = B-7): GET /chain is how an agent finds the contracts, so a failing balance read must
+    not 500 it, and must not cost one retrying RPC call per request while the outage lasts."""
+    import demo.tap as tapmod
+    from fastapi.testclient import TestClient
+    c = TestClient(_app(chain, tmp_path))
+    assert c.get("/chain").json()["tap"]["balanceWei"] > 0
+    calls = []
+
+    def down(self):
+        calls.append(self)
+        raise ConnectionError("simulated RPC outage")
+
+    monkeypatch.setattr(tapmod, "BALANCE_CACHE", 0)  # the warm figure has expired
+    monkeypatch.setattr(tapmod.Tap, "balance", down)  # the app has its own ledger: patch every tap
+    for _ in range(5):
+        r = c.get("/chain")
+        assert r.status_code == 200
+        assert r.json()["tap"]["balanceWei"] > 0      # the last known figure, not an error
+    assert len(calls) == 1, calls                     # the failure is cached for a few seconds
+    cold = _tap(chain, tmp_path / "cold")             # never read successfully: null, not a 500
+    assert cold.status()["balanceWei"] is None
+
+
+def test_precompile_recipient_refused_before_anything_is_charged(chain, tmp_path):
+    """F-8 (A-4): a precompile has no code, so get_code passes it, but a plain 21,000-gas transfer to
+    one burns the gas and delivers nothing. The tap asks the node first, before the charge."""
+    from demo.tap import TapError
+    L, addrs, _ = chain
+    tap = _tap(chain, tmp_path)
+    for precompile in ("0x0000000000000000000000000000000000000001",   # ecrecover
+                       "0x0000000000000000000000000000000000000008"):  # ecPairing
+        with pytest.raises(TapError) as e:
+            tap.give(precompile, "test")
+        assert e.value.status == 400 and "plain transfer" in str(e.value)
+        assert L.w3.eth.get_balance(precompile) == 0
+        assert L.token(addrs["token"]).functions.balanceOf(precompile).call() == 0
+    assert tap.status()["given"] == 0                 # nothing charged, not even the address
+    assert tap.give(Account.create().address, "test")["transactions"]
+    assert len(_state(tmp_path)["recent"]) == 1       # and no hourly slot was spent on the refusals
+
+
+def test_file_lock_does_not_leak_a_descriptor(chain, tmp_path, monkeypatch):
+    """F-9 (B-6): both _FileLock classes closed the fd only on BlockingIOError, so any other flock
+    failure leaked one per attempt until the process ran out of descriptors."""
+    import fcntl as fcntlmod
+    from demo.tap import TapError
+    from foliant.chain import ChainGate
+    tap = _tap(chain, tmp_path)
+
+    def enolck(fd, op):
+        raise OSError(37, "No locks available")
+
+    def open_fds():
+        return len(os.listdir("/proc/self/fd"))
+
+    monkeypatch.setattr(fcntlmod, "flock", enolck)  # the same module object both files imported
+    before = open_fds()
+    for _ in range(40):
+        with pytest.raises((OSError, TapError)):  # how it is reported is not the point; the fd is
+            tap.give(Account.create().address, "test")
+    assert open_fds() - before <= 2, (before, open_fds())
+    gate_lock = ChainGate._FileLock(tmp_path / "gate.json")
+    before = open_fds()
+    for _ in range(40):
+        with pytest.raises(OSError):
+            with gate_lock:
+                pass
+    assert open_fds() - before <= 2, (before, open_fds())
+
+
+def test_address_prefix_is_required_and_normalised(chain, tmp_path):
+    """F-10 (A-8 = B-8): Web3.is_address accepts bare hex, and slicing [2:] then ate two nibbles — a
+    correct address was refused "bad checksum" (or, lowercase, raised out of give()). The prefix is now
+    required, and a 0X one is normalised rather than mangled."""
+    from demo.tap import TapError
+    tap = _tap(chain, tmp_path)
+    v = Account.create().address                      # checksummed, mixed case
+    for bare in (v[2:], v[2:].lower()):
+        with pytest.raises(TapError) as e:
+            tap.give(bare, "test")
+        assert e.value.status == 400 and "0x" in str(e.value) and "checksum" not in str(e.value), bare
+    assert tap.status()["given"] == 0
+    assert tap.give("0X" + v[2:], "test")["address"] == v          # 0X accepted, checksum honoured
+    w = Account.create().address
+    with pytest.raises(TapError) as e:
+        tap.give("0X" + w[2:].swapcase(), "test")     # a real typo is still caught through a 0X prefix
+    assert e.value.status == 400 and "checksum" in str(e.value)
+
+
+def test_oversized_body_refused(chain, tmp_path):
+    """F-11 (A-8): POST /tap takes one address; anything over 1 KiB is refused before it is parsed."""
+    from fastapi.testclient import TestClient
+    c = TestClient(_app(chain, tmp_path))
+    assert c.post("/tap", content=b"x" * 2048).status_code == 413
+    v = Account.create().address
+    padded = json.dumps({"address": v, "pad": "y" * 2000})
+    r = c.post("/tap", content=padded, headers={"content-type": "application/json"})
+    assert r.status_code == 413 and "1024" in r.json()["error"]
+    assert c.post("/tap", json={"address": v}).status_code == 200   # the refusals charged nothing
+    assert c.get("/chain").json()["tap"]["given"] == 1
