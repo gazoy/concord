@@ -38,10 +38,13 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import math
 import os
+import sys
 import tempfile
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -62,6 +65,24 @@ BALANCE_CACHE = 30    # seconds status() trusts a balance figure for (give() nev
 BALANCE_RETRY = 5     # seconds status() waits before asking again after a failed balance read (F-7)
 # a transport or JSON-RPC failure, as opposed to a bug of ours: only these become "chain unavailable" (F-11)
 RPC_ERRORS = (Web3Exception, requests.RequestException, ConnectionError, TimeoutError)
+# a JSON-RPC error from the F-8 probe that is the recipient's fault rather than the node's (D4)
+PROBE_REFUSALS = ("precompile", "execution reverted", "out of gas", "invalid opcode", "revert")
+# addresses no externally-owned account is ever at: the EVM precompiles, and the two ranges Avalanche
+# reserves for its stateful precompiles (0x0100..00XX and 0x0200..00XX), which answer a call cleanly
+RESERVED_RANGES = ((0, 2 ** 16), (1 << 152, (1 << 152) + 256), (2 << 152, (2 << 152) + 256))
+
+
+def _reserved(address: str) -> bool:
+    n = int(address, 16)
+    return any(lo <= n < hi for lo, hi in RESERVED_RANGES)
+
+
+def _is_int(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _is_number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
 class TapError(Exception):
@@ -163,6 +184,9 @@ class Tap:
         except RPC_ERRORS as e:  # an RPC failure in the pre-checks: nothing was charged. Only transport
             # and JSON-RPC errors are reported this way; a bug of ours is not "chain unavailable" (F-11)
             raise TapError(502, f"chain unavailable: {type(e).__name__}") from None
+        except Exception:  # noqa: BLE001  a full disk, ENOLCK on the lock file, a bug of ours: the
+            traceback.print_exc(file=sys.stderr)  # operator gets the traceback, the visitor a clean
+            raise TapError(503, "the tap is temporarily unavailable") from None  # status, not a 500 (D2)
         finally:
             self._lock.release()
 
@@ -182,32 +206,46 @@ class Tap:
             raise TapError(429, "the tap is busy; try again in an hour")
         if len(self._recent) >= self.per_day:
             raise TapError(429, "the tap has given all it gives in a day; try again tomorrow")  # F-1
+        if _reserved(to):  # costs no RPC, so a bot hammering a precompile is refused for free (F-8, D6)
+            raise TapError(400, "the address is in a range reserved for precompiles; the tap funds "
+                                "externally-owned addresses only")
         if w3.eth.get_code(to):
             raise TapError(400, "the address is a contract; the tap funds externally-owned addresses only")
         gas_price = int(w3.eth.gas_price * GAS_HEADROOM)
         need = self.avax_wei + gas_price * (21_000 + 80_000)  # the transfer and the mint, with headroom
         if self.balance() < need:  # read fresh: status()'s cache may be stale-high (F-5)
             raise TapError(503, "the tap is dry; it will be refilled")
-        if self.avax_wei:
-            # get_code passes anything without bytecode, which includes the precompiles: a plain
-            # 21,000-gas transfer to one of those burns the gas and delivers nothing (F-8). Ask the node
-            # what the transfer would cost and run it as a call, before the attempt is charged, so a
-            # recipient that cannot receive one is refused without spending a slot or any gas.
-            probe = {"from": self.key.address, "to": to, "value": self.avax_wei}
-            try:
-                gas = w3.eth.estimate_gas(probe)
-                w3.eth.call({**probe, "gas": 21_000})  # some nodes answer 21,000 without simulating
-            except (ContractCustomError, ContractLogicError, Web3RPCError):
-                raise TapError(400, "the address cannot receive a plain transfer (a precompile?); "
-                                    "the tap funds externally-owned addresses only") from None
-            if gas != 21_000:
-                raise TapError(400, f"a plain transfer to the address costs {gas} gas, not 21000; "
-                                    "the tap funds externally-owned addresses only")
+        # get_code passes anything without bytecode, which includes the precompiles the range check above
+        # does not know about: a plain 21,000-gas transfer to one of those burns the gas and delivers
+        # nothing (F-8). Ask the node what the transfer would cost and run it as a call, before the
+        # attempt is charged, so a recipient that cannot receive one is refused with no slot and no gas.
+        # The probe runs even when there is no AVAX to send: the mint would otherwise strand the tokens
+        # at a recipient that can never move them (D5).
+        probe = {"from": self.key.address, "to": to, "value": self.avax_wei}
+        try:
+            gas = w3.eth.estimate_gas(probe)
+            w3.eth.call({**probe, "gas": 21_000})  # some nodes answer 21,000 without simulating
+        except (ContractCustomError, ContractLogicError):
+            raise TapError(400, "the address cannot receive a plain transfer; the tap funds "
+                                "externally-owned addresses only") from None
+        except Web3RPCError as e:
+            # only a revert or an out-of-gas is the recipient's fault: a node that is restarting or has
+            # pruned the state must not be reported to the visitor as a bad address (D4)
+            if not any(m in str(e).lower() for m in PROBE_REFUSALS):
+                raise
+            raise TapError(400, "the address cannot receive a plain transfer; the tap funds "
+                                "externally-owned addresses only") from None
+        if gas != 21_000:
+            raise TapError(400, f"a plain transfer to the address costs {gas} gas, not 21000; the tap "
+                                "funds externally-owned addresses only")
         latest = w3.eth.get_transaction_count(self.key.address, "latest")
         pending = w3.eth.get_transaction_count(self.key.address, "pending")
         if self._stuck and (self._stuck["nonce"] < latest or pending == latest):
             self._stuck = None  # the stuck transaction was mined, replaced or dropped: forget it (F-3)
-            self._save()
+            try:
+                self._save()
+            except OSError:  # the record clears again on the next attempt; do not 500 over it (D2)
+                pass
         if pending != latest:
             # a transaction of ours is still in flight: a new one would queue behind it and time out,
             # spending the visitor's one attempt on a failure (R2-1)
@@ -288,7 +326,10 @@ class Tap:
             raise err from None
         self._invalidate_balance()
         self._given[key] = "funded"
-        self._save()
+        try:
+            self._save()
+        except OSError:  # the visitor has their funds: hand them the hashes rather than a 500. The
+            pass         # record on disk stays "pending", which still refuses a second attempt (D2)
         self._given_count = len(self._given)
         return {"address": to, "avaxWei": self.avax_wei, "tokens": self.tokens, "transactions": txs}
 
@@ -340,18 +381,22 @@ class Tap:
             self.fd = None
 
         def __enter__(self):
-            self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
-            try:
+            self.fd = None
+            try:  # the open is inside the guard too, so a missing state directory is handled here (D2)
+                self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
                 fcntl.flock(self.fd, fcntl.LOCK_EX if self.blocking else fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                os.close(self.fd)
-                self.fd = None
+                self._close()
                 raise TapError(503, "the tap is serving someone else; retry in a few seconds") from None
             except BaseException:  # ENOLCK, an interrupting signal: close the fd rather than leak
-                os.close(self.fd)  # one per request until the process runs out of them (F-9)
-                self.fd = None
+                self._close()      # one per request until the process runs out of them (F-9)
                 raise
             return self
+
+        def _close(self):
+            if self.fd is not None:
+                os.close(self.fd)
+                self.fd = None
 
         def __exit__(self, *exc):
             if self.fd is not None:
@@ -383,8 +428,12 @@ class Tap:
                 raise TypeError("'given' must be an object of address -> record")
             if not isinstance(recent, list) or not isinstance(clients, dict):
                 raise TypeError("'recent' must be a list and 'clients' an object")
-            if stuck is not None and not (isinstance(stuck, dict) and {"nonce", "hash", "since"} <= set(stuck)):
-                raise TypeError("'stuck' must be {nonce, hash, since}")
+            # the values too, not only the keys: a string nonce parsed fine and then raised TypeError at
+            # the `stuck["nonce"] < latest` comparison, turning a bad file into a 500 on every give (D1)
+            if stuck is not None and not (isinstance(stuck, dict) and {"nonce", "hash", "since"} <= set(stuck)
+                                          and _is_int(stuck["nonce"]) and isinstance(stuck["hash"], str)
+                                          and _is_number(stuck["since"])):
+                raise TypeError("'stuck' must be {nonce: int, hash: str, since: finite number}")
             recent = [float(t) for t in recent]
             clients = {c: [float(t) for t in ts] for c, ts in clients.items()}
         except (ValueError, TypeError, AttributeError, OSError) as e:

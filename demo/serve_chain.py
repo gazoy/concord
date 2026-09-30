@@ -15,7 +15,9 @@ off-chain updates and settles.
 Behind a reverse proxy, give POST /tap a read timeout of at least 2 x demo.tap.RECEIPT_TIMEOUT (two
 minutes by default): a give waits for two receipts, so a proxy with the usual 60 s read timeout returns
 504 to the visitor while the tap is still funding them, and the visitor's one attempt is spent on what
-looks to them like a failure (F-11). Bodies over 1 KiB are refused 413 here, before they are read.
+looks to them like a failure (F-11). A POST /tap body is refused 413 as soon as it passes 1 KiB: the
+request is read a chunk at a time and abandoned there, so a body with no content-length is not buffered
+in full either (D3).
 """
 from __future__ import annotations
 
@@ -121,14 +123,18 @@ def make_app() -> FastAPI:
     async def tap_endpoint(request: Request):
         if tap is None:
             return JSONResponse(status_code=404, content={"error": "no tap on this server"})
-        # the only body we accept is {"address": "0x..."}: refuse anything larger before reading or
-        # parsing it, rather than buffering whatever a visitor sends (F-11)
+        # the only body we accept is {"address": "0x..."}: refuse anything larger on the declared
+        # length, and otherwise read it a chunk at a time and stop at the bound rather than buffering
+        # whatever a visitor sends under a chunked encoding (F-11, D3)
+        too_big = JSONResponse(status_code=413, content={"error": f"body over {MAX_TAP_BODY} bytes"})
         declared = request.headers.get("content-length")
         if declared is not None and declared.isdigit() and int(declared) > MAX_TAP_BODY:
-            return JSONResponse(status_code=413, content={"error": f"body over {MAX_TAP_BODY} bytes"})
-        raw = await request.body()
-        if len(raw) > MAX_TAP_BODY:  # no content-length (a chunked body): checked before parsing
-            return JSONResponse(status_code=413, content={"error": f"body over {MAX_TAP_BODY} bytes"})
+            return too_big
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw += chunk
+            if len(raw) > MAX_TAP_BODY:
+                return too_big
         try:
             body = json.loads(raw)
         except Exception:  # noqa: BLE001
