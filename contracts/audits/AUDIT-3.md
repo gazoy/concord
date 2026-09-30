@@ -397,3 +397,73 @@ the one skip, plus the AUDIT-2 contract carry-overs.
 | Stale-update recovery | Implemented as proposed: on a "stale update" 402 immediately after a discard, the client confirms the discarded update (the only one the gate can hold) and pays once more. |
 
 `tests/test_chain_audit.py`: 34 pass, 1 skipped (moot reproduction). Constraints that remain documented for the demo: one provider process per key and state directory is still the recommended deployment (the locks make more than one safe, but not faster); `FOLIANT_POOL_ID` should be fixed across restarts.
+
+## Verification, round 3 (auditor, 30 Sep 2026, commit 879e6be)
+
+Method: re-read the diff and the locked `verify`/`settle` paths, `_save`, `_FileLock`, `ChainAgent.confirm`/
+`discard`/`discarded` and `ChainHttpClient.request`/`_pay_once`; hammered `verify` from 8 threads (distinct
+and identical updates) and from two forked processes sharing one state directory; forced a failing save;
+quantified the stale-update recovery against a lying gate. Four tests appended (`# VERIFY-3`).
+`tests/test_chain.py` 2 of 2; `tests/test_chain_audit.py` 36 pass, 1 skipped (moot A3-1 repro), 0 fail.
+`foliant/` untouched.
+
+### Status of round-2 findings
+
+| Finding | Status | Evidence |
+| --- | --- | --- |
+| A3-10 Medium, two processes | **Closed** | `threading.Lock` + `flock` on `<state>.lock` around `verify` and `settle`, `_load()` inside the lock before the staleness check. Two forked processes each fed all six updates (opposite orders, started together): 6 accepts in total, a fresh gate loads all 6 entries / 18 unsettled and refuses every replay (`test_v3_two_processes_share_state_exactly_once`). |
+| A3-11 Low, state name | **Closed** | Named by chain, provider, token; the price is no longer in the name. |
+| A3-12 Low, pool id | **Closed** | Batches keyed by the entry's pool id; `settle(pid, …)` per pool. |
+| A3-13 Medium, drop on RPC error | **Closed** | No `except` around `L.channel`; an error propagates before `_save`, so the disk keeps the entry and the next `_load` restores memory. Idempotent: entries settled before the error are pruned on the next call by `balance <= paid`. |
+| A3-14 Low, channel per failure | **Closed** | `ChainHttpClient.channels` records every open; reuse scans it with the baseline from `latest` or on-chain `paid`. |
+| A3-15 Medium, concurrent saves | **Closed** | 8 threads, 8 distinct valid updates: 8 × 200, `latest` 8, 24 unsettled; 8 threads, one update: exactly one 200, seven 402, 27 unsettled on disk and in memory; `mkstemp` leaves no litter (`test_v3_threads_distinct_and_same_update_exactly_once`). Failed save (`OSError` from `_save`): memory rolled back to the pre-accept state, file byte-identical, generic 402 `provider state unavailable, retry` with no path, and the same header succeeds once the disk is back (`test_v3_failed_save_leaves_memory_and_file_consistent`). |
+| Stale recovery | **Implemented; bound quantified below** | `discarded` fallback in `confirm`; the client confirms and pays once more on a `stale update` 402. Dropped-response case recovers at exactly one price (`test_v3_stale_recovery_bounds` (a)). |
+
+### Stale recovery: bounds (item 3)
+
+- Free call for the client: none. The gate serves only a balance strictly above its latest and only for
+  a signature over that balance; confirming a discarded update moves the client's own baseline up, never the
+  gate's down. Edited balances fail recovery; replays are stale (`test_v3_stale_recovery_bounds` (c)).
+- Double charge by a malicious gate: **one extra price per incident, incidents unbounded.** A gate that
+  answers `stale update` to every first paid attempt and serves the second collects 2 × price per served
+  call (three calls: balance 9 → 27, `test_v3_stale_recovery_bounds` (b)). This is the designed cost
+  (the client never signs more than pending + price per recovery), and the gate could already take the
+  first signed update without serving, so the recovery does not hand it anything it did not hold; but it
+  turns "take once and the client walks away" into "charge double for as long as the client stays".
+  Recommendation (A3-16 Low, client side): rate-limit recoveries — allow one per object until the next
+  successful call without recovery, or refuse after two consecutive incidents on the same object — and
+  surface the incident to the caller (a receipt count vs. balance check makes it visible).
+
+### New findings
+
+**A3-16 Low: unbounded stale-update recoveries let a dishonest gate charge double indefinitely.** See above;
+`chain.py` `ChainHttpClient.request` recovers on every request. Fix: a per-object recovery budget as above.
+
+Informational, round 3: (i) `_load()` runs inside `verify` but outside `_verify_locked`'s `try`, so a state
+file corrupted while the server runs (only possible by hand: writes are `mkstemp` + `os.replace`) yields a
+500 per request rather than a 402; fail-closed is the right direction, but the operator should see a clear
+log line. (ii) `request()` calls `r.json()` on every 402; a non-JSON 402 from an intermediary raises in the
+client. (iii) `settle` holds both locks across its transactions, so accepts wait for the settlement to be
+mined (seconds on Fuji): expected, document it. (iv) Round-1 I-4 stands: no `Closing`/`Exiting` watcher
+or timer; the shutdown hook and `/settle` are the only settlement triggers.
+
+### Verdict
+
+Every finding from rounds 1 and 2 (A3-1 through A3-15) is closed at 879e6be, with exactly-once acceptance
+verified across threads and across processes, saves atomic and rolled back on failure, settlement
+per-entry and per-pool, and the client's recovery bounded to one price per incident.
+
+**Fuji demo and cost report: fit to run at 879e6be, with no operating caveats beyond keeping
+`FOLIANT_POOL_ID` fixed across restarts and settling (shutdown hook or `/settle`) before the pool or channel
+timeouts.** Multiple workers and concurrent clients are now safe; none of the changes alters the transaction
+counts or gas in the cost report.
+
+**Before mainnet (all small, none blocking the testnet work):** A3-16 (recovery budget in the client); I-4
+(settle on `Closing`/`Exiting` events or a timer inside the timeouts — the one remaining way for a provider
+to lose accepted revenue); a log line for a corrupt state file; `FOLIANT_SETTLE_KEY` set whenever `/settle`
+is reachable; and the AUDIT-2 contract carry-overs (A2-7 settle deadline, malicious-payer fuzz, A2-6/A2-8
+documentation).
+
+### Resolution of round-3 findings (author)
+
+A3-16: the client allows at most two consecutive stale-update recoveries before refusing to pay a provider again (`ChainHttpClient.incidents`, reset on a clean success); a non-JSON 402 is returned to the caller rather than raising. Carried to the mainnet list: I-4 (settle on Closing/Exiting events and on a timer), a log line for a corrupt state file, `FOLIANT_SETTLE_KEY` wherever `/settle` is reachable, and the AUDIT-2 contract carry-overs.

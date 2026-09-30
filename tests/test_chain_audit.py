@@ -855,3 +855,145 @@ def test_v2_decoded_reverts(chain):  # VERIFY-2 A3-8
         poor.open_channel(prov, token, 60, 3600, salt=42)
     with pytest.raises(FoliantError):
         payer.open_channel(prov, token, 10, 0, salt=43)  # BadUpdate("timeout out of range") -> FoliantError
+
+
+# ================================================================== Verification, round 3 (commit 879e6be)
+
+import multiprocessing
+
+
+def test_v3_threads_distinct_and_same_update_exactly_once(chain, tmp_path):  # VERIFY-3 A3-15
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    gate = ChainGate(L, KEYS[3], ChainOffer(prov, token, 3), state_dir=str(tmp_path))
+    payer = _funded_agent(L, token, KEYS[1])
+    cids = [payer.open_channel(prov, token, 100, 3600, salt=50 + i) for i in range(8)]
+    hdrs = [_header("foliant-channel", _pay(payer, c, 3)) for c in cids]
+    tc = _app(gate)
+    with ThreadPoolExecutor(8) as ex:
+        codes = list(ex.map(lambda h: tc.post("/infer", content=b"x", headers={HDR_PAYMENT: h}).status_code, hdrs))
+    assert codes == [200] * 8 and len(gate.latest) == 8 and gate.revenue_unsettled == 24
+    same = _header("foliant-channel", _pay(payer, cids[0], 3))
+    with ThreadPoolExecutor(8) as ex:
+        codes = list(ex.map(lambda _: tc.post("/infer", content=b"x", headers={HDR_PAYMENT: same}).status_code, range(8)))
+    assert codes.count(200) == 1 and codes.count(402) == 7 and gate.revenue_unsettled == 27
+    assert json.loads(gate.state_path.read_text())["revenue_unsettled"] == 27
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith("foliant-gate") and p.suffix not in (".json", ".lock")]  # no tmp litter
+
+
+def _proc_accept(args):
+    rpc, addrs, key, state_dir, hdrs, conn = args
+    from web3 import Web3 as _W
+    w3 = _W(_W.HTTPProvider(rpc))
+    L = ChainLedger("", addrs["accounts"], addrs["channels"], addrs["pools"], w3=w3)
+    prov = Account.from_key(key).address
+    gate = ChainGate(L, key, ChainOffer(prov, addrs["token"], 3), state_dir=state_dir)
+    conn.recv()  # start together
+    n = 0
+    for h in hdrs:
+        try:
+            gate.verify(h)
+            n += 1
+        except PaymentRequired:
+            pass
+    conn.send(n)
+
+
+def test_v3_two_processes_share_state_exactly_once(chain, tmp_path):  # VERIFY-3 A3-10
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    payer = _funded_agent(L, token, KEYS[1])
+    cids = [payer.open_channel(prov, token, 100, 3600, salt=60 + i) for i in range(6)]
+    hdrs = [_header("foliant-channel", _pay(payer, c, 3)) for c in cids]
+    rpc = L.w3.provider.endpoint_uri
+    ctx = multiprocessing.get_context("fork")
+    procs, conns = [], []
+    for order in (hdrs, list(reversed(hdrs))):
+        a, b = ctx.Pipe()
+        p = ctx.Process(target=_proc_accept, args=((rpc, addrs, KEYS[3], str(tmp_path), order, b),))
+        p.start()
+        procs.append(p)
+        conns.append(a)
+    for c in conns:
+        c.send("go")
+    counts = [c.recv() for c in conns]
+    for p in procs:
+        p.join()
+    assert sum(counts) == 6, counts  # every update accepted exactly once across the two processes
+    C = ChainGate(L, KEYS[3], ChainOffer(prov, token, 3), state_dir=str(tmp_path))
+    assert len(C.latest) == 6 and C.revenue_unsettled == 18  # nothing lost on disk
+    for h in hdrs:
+        with pytest.raises(PaymentRequired):
+            C.verify(h)
+
+
+def test_v3_failed_save_leaves_memory_and_file_consistent(chain, tmp_path):  # VERIFY-3 A3-15
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    gate = ChainGate(L, KEYS[3], ChainOffer(prov, token, 3), state_dir=str(tmp_path))
+    payer = _funded_agent(L, token, KEYS[1])
+    cid = payer.open_channel(prov, token, 100, 3600, salt=70)
+    gate.verify(_header("foliant-channel", _pay(payer, cid, 3)))
+    on_disk = gate.state_path.read_text()
+    u2 = _pay(payer, cid, 3)
+    real = gate._save
+    gate._save = lambda: (_ for _ in ()).throw(OSError(28, "No space left on device"))
+    with pytest.raises(PaymentRequired) as ei:
+        gate.verify(_header("foliant-channel", u2))
+    gate._save = real
+    assert ei.value.terms["error"] == "provider state unavailable, retry"  # generic, no path echoed
+    assert gate.state_path.read_text() == on_disk and len(gate.latest) == 1 and gate.revenue_unsettled == 3
+    assert gate.verify(_header("foliant-channel", u2)).paid == 3  # the same header succeeds once the disk is back
+
+
+def test_v3_stale_recovery_bounds(chain, tmp_path):  # VERIFY-3 stale-update recovery
+    """(a) Dropped response: client recovers at the cost of one price. (b) A lying gate ('stale' on every
+    first attempt while serving the retry) charges 2 x price per served call - one extra price per incident,
+    incidents unbounded. (c) The client cannot obtain a free call: the gate never serves a balance <= its latest."""
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    gate = ChainGate(L, KEYS[3], ChainOffer(prov, token, 3), state_dir=str(tmp_path))
+    payer = _funded_agent(L, token, KEYS[1])
+    tc = _app(gate)
+    client = ChainHttpClient(payer, tc, default_deposit=60, prefer_pool=False)
+    assert client.request("POST", "/infer", content=b"a").status_code == 200
+    cid = client.channels[0]
+    # (a) accepted, response lost
+    u = payer.pay_channel(cid, 3)
+    gate.verify(_header("foliant-channel", u))
+    payer.discard(cid)
+    assert client.request("POST", "/infer", content=b"b").status_code == 200
+    assert payer.latest[cid]["balance"] == 9 and gate.latest[f"foliant-channel:{_hex(cid)}:{_hex(payer.account_id)}"]["balance"] == 9
+    # (b) lying gate: refuse every first attempt as stale, serve the second
+    real = gate.verify
+    state = {"n": 0}
+
+    def lying(h):
+        if not h:
+            return real(h)  # the unpaid probe: ordinary 402 with terms
+        state["n"] += 1
+        if state["n"] % 2 == 1:
+            raise PaymentRequired({**gate.terms(), "error": "stale update"})
+        return real(h)
+
+    gate.verify = lying
+    try:
+        for _ in range(3):
+            assert client.request("POST", "/infer", content=b"c").status_code == 200
+    finally:
+        gate.verify = real
+    assert payer.latest[cid]["balance"] == 9 + 3 * 6  # 3 served calls cost 18: exactly one extra price each
+    # (c) no free call: replaying, re-signing at or below the gate's balance, or confirming without paying all fail
+    for bal in (9 + 18, 9 + 17):
+        u = payer.pay_channel(cid, 0)
+        u = {**u, "balance": bal}
+        with pytest.raises(PaymentRequired):
+            gate.verify(_header("foliant-channel", u))  # signature does not cover the edited balance
+    payer.discard(cid)
+    payer.confirm(cid)  # confirming an unpaid discard moves the client's own baseline only
+    with pytest.raises(PaymentRequired):
+        gate.verify(_header("foliant-channel", {**payer.latest[cid]}))  # gate still at 27: stale

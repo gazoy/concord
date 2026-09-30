@@ -113,6 +113,14 @@ def _hex(b: bytes) -> str:
     return "0x" + b.hex()
 
 
+def _err(r) -> str:
+    """The `error` field of a 402 body, or "" when the body is not the gate's JSON (a proxy, say)."""
+    try:
+        return str(r.json().get("error", ""))
+    except Exception:
+        return ""
+
+
 # --------------------------------------------------------------------------- policy
 
 
@@ -630,6 +638,7 @@ class ChainHttpClient:
         self.default_deposit, self.prefer_pool, self.timeout_secs = default_deposit, prefer_pool, timeout_secs
         self.receipts: list[dict] = []
         self.channels: list[bytes] = []  # channels this client opened, confirmed or not (A3-14)
+        self.incidents = 0               # stale-update recoveries since the last clean success (A3-16)
 
     def _choose(self, accepts: list[dict]) -> dict:
         if self.prefer_pool:
@@ -669,17 +678,28 @@ class ChainHttpClient:
         r = self.http.request(method, url, **kw)
         if r.status_code != 402:
             return r
-        term = self._choose(r.json()["accepts"])
+        try:
+            term = self._choose(r.json()["accepts"])
+        except (ValueError, KeyError):
+            return r  # a 402 that is not Foliant terms
         headers = kw.pop("headers", {})
         r = self._pay_once(method, url, term, headers, kw)
-        if r.status_code == 402 and str(r.json().get("error", "")).startswith("stale update"):
+        if r.status_code == 402 and _err(r).startswith("stale update"):
             # the gate holds an update we discarded (a dropped response): it can only be our pending one,
             # since we never sign above it. Confirm it and pay once more; cost bounded to one call's price.
+            # A gate that answers "stale" to every first attempt would double-charge, so at most two
+            # consecutive incidents are tolerated before the client stops paying this provider (A3-16).
+            self.incidents += 1
+            if self.incidents > 2:
+                raise FoliantError("provider keeps reporting our payments stale; refusing to pay again")
             self.agent.confirm(_canon32(_unb64(headers[HDR_PAYMENT])["id"]))
             r = self._pay_once(method, url, term, headers, kw)
+        if r.status_code == 200:
+            self.incidents = 0
         return r
 
     def _pay_once(self, method, url, term, headers, kw):
+        """One paid attempt; the pending update is confirmed on 200 and set aside otherwise."""
         payment = self._payment_for(term)
         obj_id = _canon32(_unb64(payment)["id"])
         headers[HDR_PAYMENT] = payment
