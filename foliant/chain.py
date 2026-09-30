@@ -18,16 +18,74 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from dataclasses import dataclass, field
 from importlib import resources
+from pathlib import Path
 from typing import Any, Optional
 
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from fastapi import Request
 from web3 import Web3
+from web3.exceptions import ContractCustomError, ContractLogicError
 
-from .errors import FoliantError, PolicyViolation
+from .errors import FoliantError, InsufficientFunds, PolicyViolation
+
+SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+_ERROR_SELECTORS = {}  # 4-byte selector -> error name, filled from the ABIs on first use
+
+
+def _canon32(hexstr: Any) -> bytes:
+    """A bytes32 id from a hex string, strictly: 0x prefix, 64 hex chars, or it is rejected."""
+    if not isinstance(hexstr, str) or len(hexstr) != 66 or hexstr[:2] != "0x":
+        raise FoliantError("malformed id")
+    return bytes.fromhex(hexstr[2:])
+
+
+def _uint(v: Any, bits: int) -> int:
+    if not isinstance(v, int) or isinstance(v, bool) or v < 0 or v >= 1 << bits:
+        raise FoliantError(f"not a uint{bits}")
+    return v
+
+
+def _check_sig(sig: Any) -> bytes:
+    """Only signatures the contracts' ECDSA accepts: 65 bytes, v in {27, 28}, low s (AUDIT-3 A3-1)."""
+    if not isinstance(sig, str) or len(sig) != 132 or sig[:2] != "0x":
+        raise FoliantError("malformed signature")
+    b = bytes.fromhex(sig[2:])
+    v = b[64]
+    s_val = int.from_bytes(b[32:64], "big")
+    if v not in (27, 28) or s_val == 0 or s_val > SECP256K1_N // 2:
+        raise FoliantError("non-canonical signature")
+    return b
+
+
+def _decode_revert(e: Exception, *contracts) -> Exception:
+    """Map a web3 revert to the reference's error classes (AUDIT-3 A3-8)."""
+    data = getattr(e, "data", None)
+    name = None
+    if isinstance(data, str) and data.startswith("0x") and len(data) >= 10:
+        sel = data[:10]
+        if not _ERROR_SELECTORS:
+            for n in ("AgentAccounts", "PaymentChannels", "Pools"):
+                for item in _abi(n)["abi"]:
+                    if item.get("type") == "error":
+                        types = ",".join(i["type"] for i in item["inputs"])
+                        _ERROR_SELECTORS[Web3.keccak(text=f"{item['name']}({types})")[:4].hex()] = item["name"]
+        name = _ERROR_SELECTORS.get(sel[2:])
+        msg = name or sel
+        if name == "PolicyViolation":
+            try:
+                from eth_abi import decode
+                msg = "PolicyViolation: " + decode(["string"], bytes.fromhex(data[10:]))[0]
+            except Exception:
+                pass
+            return PolicyViolation(msg)
+        if name == "InsufficientFunds":
+            return InsufficientFunds("insufficient funds")
+        return FoliantError(msg)
+    return FoliantError(str(e))
 
 HDR_PAYMENT = "X-PAYMENT"
 HDR_RECEIPT = "X-PAYMENT-RESPONSE"
@@ -155,20 +213,20 @@ class ChainLedger:
 
     def recover_channel_update(self, u: dict) -> str:
         domain, types = self.channel_update_types()
-        msg = {"channel": bytes.fromhex(u["id"][2:]), "account": bytes.fromhex(u["account"][2:]),
-               "seq": u["seq"], "balance": u["balance"]}
+        msg = {"channel": _canon32(u["id"]), "account": _canon32(u["account"]),
+               "seq": _uint(u["seq"], 64), "balance": _uint(u["balance"], 256)}
         return _recover_typed(domain, types, msg, u["sig"])
 
     def recover_pool_update(self, u: dict) -> str:
         domain, types = self.pool_update_types()
-        msg = {"pool": bytes.fromhex(u["id"][2:]), "account": bytes.fromhex(u["account"][2:]),
-               "epoch": u["epoch"], "seq": u["seq"], "balance": u["balance"]}
+        msg = {"pool": _canon32(u["id"]), "account": _canon32(u["account"]),
+               "epoch": _uint(u["epoch"], 64), "seq": _uint(u["seq"], 64), "balance": _uint(u["balance"], 256)}
         return _recover_typed(domain, types, msg, u["sig"])
 
 
 def _recover_typed(domain: dict, types: dict, msg: dict, sig: str) -> str:
     from eth_account.messages import encode_typed_data
-    return Account.recover_message(encode_typed_data(domain, types, msg), signature=sig)
+    return Account.recover_message(encode_typed_data(domain, types, msg), signature=_check_sig(sig))
 
 
 # --------------------------------------------------------------------------- agent side
@@ -182,15 +240,19 @@ class ChainAgent:
         self.key = Account.from_key(private_key)
         self.address = self.key.address
         self.account_id: Optional[bytes] = account_id
-        self.latest: dict[bytes, dict] = {}  # channel/pool id -> last signed update
+        self.latest: dict[bytes, dict] = {}   # channel/pool id -> last update the provider accepted
+        self.pending: dict[bytes, dict] = {}  # channel/pool id -> last update signed but not yet confirmed
         self._seq: dict[bytes, int] = {}
 
     # transactions
 
     def _send(self, fn, value: int = 0) -> dict:
         w3 = self.L.w3
-        tx = fn.build_transaction({"from": self.address, "nonce": w3.eth.get_transaction_count(self.address),
-                                   "value": value, "chainId": self.L.chain_id})
+        try:
+            tx = fn.build_transaction({"from": self.address, "nonce": w3.eth.get_transaction_count(self.address, "pending"),
+                                       "value": value, "chainId": self.L.chain_id})
+        except (ContractCustomError, ContractLogicError) as e:
+            raise _decode_revert(e) from None  # estimateGas reverted: nothing was sent, no gas spent
         signed = self.key.sign_transaction(tx)
         h = w3.eth.send_raw_transaction(signed.raw_transaction)
         r = w3.eth.wait_for_transaction_receipt(h)
@@ -230,6 +292,7 @@ class ChainAgent:
     def join_pool(self, pid: bytes, deposit: int) -> None:
         self._send(self.L.pools.functions.join(pid, self.account_id, deposit, b"", 0))
         self.latest.pop(pid, None)
+        self.pending.pop(pid, None)
         self._seq.pop(pid, None)
 
     def close_channel(self, cid: bytes) -> None:
@@ -249,11 +312,15 @@ class ChainAgent:
     def finalize_exit(self, pid: bytes) -> None:
         self._send(self.L.pools.functions.finalizeExit(pid, self.account_id))
         self.latest.pop(pid, None)
+        self.pending.pop(pid, None)
         self._seq.pop(pid, None)
 
     # off-chain updates (EIP-712). Nothing is sent.
 
     def pay_channel(self, cid: bytes, amount: int) -> dict:
+        """Sign the next update adding `amount`. It is `pending` until `confirm(cid)`; signing again
+        without confirming re-signs at the same balance (the earlier one was never delivered), so a
+        refused or dropped request never makes the next call pay twice (AUDIT-3 A3-9)."""
         ch = self.L.channel(cid)
         prev = self.latest[cid]["balance"] if cid in self.latest else ch["paid"]
         balance = prev + amount
@@ -265,8 +332,17 @@ class ChainAgent:
                                                        "balance": balance}).signature
         u = {"kind": "channel", "id": _hex(cid), "account": _hex(self.account_id), "seq": seq, "balance": balance,
              "sig": _hex(sig)}
-        self._seq[cid], self.latest[cid] = seq, u
+        self._seq[cid], self.pending[cid] = seq, u
         return u
+
+    def confirm(self, obj_id: bytes) -> None:
+        """The provider accepted the pending update: it is now what the agent owes."""
+        if obj_id in self.pending:
+            self.latest[obj_id] = self.pending.pop(obj_id)
+
+    def discard(self, obj_id: bytes) -> None:
+        """The pending update was not accepted; forget it."""
+        self.pending.pop(obj_id, None)
 
     def pay_pool(self, pid: bytes, amount: int) -> dict:
         claim = self.L.claim(pid, self.account_id)
@@ -282,7 +358,7 @@ class ChainAgent:
                                                        "seq": seq, "balance": balance}).signature
         u = {"kind": "pool", "id": _hex(pid), "account": _hex(self.account_id), "epoch": claim["epoch"], "seq": seq,
              "balance": balance, "sig": _hex(sig)}
-        self._seq[pid], self.latest[pid] = seq, u
+        self._seq[pid], self.pending[pid] = seq, u
         return u
 
 
@@ -322,12 +398,29 @@ class ChainGate:
     """Provider side of x402 over the contracts. Verifies off-chain updates against chain state and
     the gate's own memory of what it has already accepted, then settles in batches."""
 
-    def __init__(self, ledger: ChainLedger, provider_key: str, offer: ChainOffer):
+    def __init__(self, ledger: ChainLedger, provider_key: str, offer: ChainOffer, state_dir: Optional[str] = ""):
+        """`state_dir`: where accepted-but-unsettled updates are persisted so a restart cannot replay them
+        (AUDIT-3 A3-3). "" (default) = FOLIANT_STATE_DIR or the current directory; None = memory only."""
         self.L = ledger
         self.key = Account.from_key(provider_key)
         self.offer = offer
-        self.latest: dict[str, dict] = {}  # "kind:id:account" -> update
+        self.latest: dict[str, dict] = {}  # "scheme:0xid:0xaccount" (canonical lower-case hex) -> update
         self.revenue_unsettled = 0
+        self.state_path: Optional[Path] = None
+        if state_dir is not None:
+            d = Path(state_dir or os.environ.get("FOLIANT_STATE_DIR", "."))
+            self.state_path = d / f"foliant-gate-{self.L.chain_id}-{self.key.address.lower()}-{self.offer.id[2:10]}.json"
+            if self.state_path.exists():
+                saved = json.loads(self.state_path.read_text())
+                self.latest = saved.get("latest", {})
+                self.revenue_unsettled = saved.get("revenue_unsettled", 0)
+
+    def _save(self) -> None:
+        if self.state_path is None:
+            return
+        tmp = self.state_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"latest": self.latest, "revenue_unsettled": self.revenue_unsettled}))
+        os.replace(tmp, self.state_path)
 
     def terms(self) -> dict:
         base = {"scheme": "foliant-channel", "network": self.L.network, "payTo": self.offer.provider,
@@ -345,11 +438,15 @@ class ChainGate:
         try:
             p = _unb64(header)
             scheme, u = p["scheme"], p["update"]
-            obj_id, acct = bytes.fromhex(u["id"][2:]), bytes.fromhex(u["account"][2:])
+            obj_id, acct = _canon32(u["id"]), _canon32(u["account"])
+            _uint(u["seq"], 64)
+            _uint(u["balance"], 256)
+            _check_sig(u["sig"])
+            u = {**u, "id": _hex(obj_id), "account": _hex(acct)}  # canonical spelling from here on (A3-2)
             if scheme == "foliant-channel":
                 ch = self.L.channel(obj_id)
                 if ch["payee"].lower() != self.offer.provider.lower() or ch["closed"] or ch["closing_at"] \
-                        or ch["token"].lower() != self.offer.token.lower() or ch["payer"] != u["account"]:
+                        or ch["token"].lower() != self.offer.token.lower() or ch["payer"].lower() != u["account"]:
                     raise FoliantError("channel not payable to this provider")
                 if self.L.recover_channel_update(u).lower() != ch["signer"].lower():
                     raise FoliantError("bad update signature")
@@ -367,8 +464,6 @@ class ChainGate:
                 deposit, onchain_bal = claim["deposit"], claim["paid"]
             else:
                 raise FoliantError(f"unknown scheme {scheme}")
-            if not (isinstance(u["seq"], int) and isinstance(u["balance"], int)) or u["seq"] < 0 or u["balance"] < 0:
-                raise FoliantError("seq and balance must be non-negative integers")
             key = f"{scheme}:{u['id']}:{u['account']}"
             prev = self.latest.get(key)
             last_bal = prev["balance"] if prev else onchain_bal
@@ -381,9 +476,12 @@ class ChainGate:
                 raise FoliantError(f"underpaid: {paid} < {self.offer.price_per_unit}")
             self.latest[key] = u
             self.revenue_unsettled += paid
+            self._save()
             return ChainPayment(scheme, obj_id, acct, u, paid)
-        except (KeyError, ValueError, TypeError, FoliantError) as e:
-            raise PaymentRequired({**self.terms(), "error": str(e)})
+        except PaymentRequired:
+            raise
+        except Exception as e:  # any malformed header is a 402 with the terms, never a 500 (A3-4)
+            raise PaymentRequired({**self.terms(), "error": str(e) or type(e).__name__})
 
     def dependency(self):
         def _dep(request: Request) -> ChainPayment:
@@ -399,8 +497,11 @@ class ChainGate:
 
     def _send(self, fn) -> dict:
         w3 = self.L.w3
-        tx = fn.build_transaction({"from": self.key.address, "nonce": w3.eth.get_transaction_count(self.key.address),
-                                   "chainId": self.L.chain_id})
+        try:
+            tx = fn.build_transaction({"from": self.key.address, "chainId": self.L.chain_id,
+                                       "nonce": w3.eth.get_transaction_count(self.key.address, "pending")})
+        except (ContractCustomError, ContractLogicError) as e:
+            raise _decode_revert(e) from None
         h = w3.eth.send_raw_transaction(self.key.sign_transaction(tx).raw_transaction)
         r = w3.eth.wait_for_transaction_receipt(h)
         if r["status"] != 1:
@@ -414,28 +515,61 @@ class ChainGate:
         return pid
 
     def settle(self) -> tuple[int, list[str]]:
-        """Step 5: one transaction per channel with a new update, one for the whole pool. Returns (total, tx hashes)."""
+        """Step 5: one transaction per channel with a new update, one for the whole pool. Returns (total, tx hashes).
+
+        Each entry is re-checked against chain state first and dropped if it can no longer be settled
+        (channel closed, member exited or rejoined, balance already reached); a channel whose transaction
+        fails is kept for the next call without blocking the others; a pool batch that reverts falls back to
+        one transaction per member so a single bad entry cannot block the rest (AUDIT-3 A3-5/6/7).
+        """
         total, txs = 0, []
-        pool_updates: list[tuple] = []
+        pool_batch: list[tuple[str, tuple]] = []
         for key, u in list(self.latest.items()):
             scheme, obj_hex, _ = key.split(":", 2)
             obj_id = bytes.fromhex(obj_hex[2:])
             if scheme == "foliant-channel":
-                ch = self.L.channel(obj_id)
-                if u["balance"] <= ch["paid"]:
+                try:
+                    ch = self.L.channel(obj_id)
+                except Exception:
+                    self.latest.pop(key, None)
                     continue
-                r = self._send(self.L.channels.functions.settle(obj_id, u["seq"], u["balance"], bytes.fromhex(u["sig"][2:])))
+                if ch["closed"] or u["balance"] <= ch["paid"]:
+                    self.latest.pop(key, None)  # settled (perhaps by someone else) or gone: nothing to do
+                    continue
+                try:
+                    r = self._send(self.L.channels.functions.settle(obj_id, u["seq"], u["balance"], bytes.fromhex(u["sig"][2:])))
+                except FoliantError:
+                    continue  # keep it; try again next time
                 total += u["balance"] - ch["paid"]
                 txs.append(r["transactionHash"].hex())
+                self.latest.pop(key, None)
             else:
-                pool_updates.append((bytes.fromhex(u["account"][2:]), u["seq"], u["balance"], bytes.fromhex(u["sig"][2:])))
-        if pool_updates:
-            before = self.L.token(self.offer.token).functions.balanceOf(self.key.address).call()
-            r = self._send(self.L.pools.functions.settle(self.offer.pool_id, pool_updates))
-            after = self.L.token(self.offer.token).functions.balanceOf(self.key.address).call()
-            total += after - before
-            txs.append(r["transactionHash"].hex())
-        self.revenue_unsettled = 0
+                acct = bytes.fromhex(u["account"][2:])
+                claim = self.L.claim(obj_id, acct)
+                if claim is None or claim["exited"] or claim["epoch"] != u.get("epoch") or u["balance"] <= claim["paid"]:
+                    self.latest.pop(key, None)
+                    continue
+                pool_batch.append((key, (acct, u["seq"], u["balance"], bytes.fromhex(u["sig"][2:]))))
+        if pool_batch:
+            token = self.L.token(self.offer.token)
+            before = token.functions.balanceOf(self.key.address).call()
+            try:
+                r = self._send(self.L.pools.functions.settle(self.offer.pool_id, [t for _, t in pool_batch]))
+                txs.append(r["transactionHash"].hex())
+                for key, _ in pool_batch:
+                    self.latest.pop(key, None)
+            except FoliantError:
+                for key, t in pool_batch:  # one bad entry must not block the rest
+                    try:
+                        r = self._send(self.L.pools.functions.settle(self.offer.pool_id, [t]))
+                        txs.append(r["transactionHash"].hex())
+                        self.latest.pop(key, None)
+                    except FoliantError:
+                        self.latest.pop(key, None)  # unsettleable: drop it rather than retry forever
+            total += token.functions.balanceOf(self.key.address).call() - before
+        if not self.latest:
+            self.revenue_unsettled = 0
+        self._save()
         return total, txs
 
 
@@ -482,7 +616,7 @@ class ChainHttpClient:
                 break
         if cid is None:
             cid = agent.open_channel(term["payTo"], term["asset"], self.default_deposit, self.timeout_secs,
-                                     salt=agent.L.now)
+                                     salt=int.from_bytes(os.urandom(8), "big"))
         return _b64({"scheme": "foliant-channel", "id": _hex(cid), "update": agent.pay_channel(cid, price)})
 
     def request(self, method: str, url: str, **kw):
@@ -490,8 +624,18 @@ class ChainHttpClient:
         if r.status_code != 402:
             return r
         term = self._choose(r.json()["accepts"])
-        headers = {**kw.pop("headers", {}), HDR_PAYMENT: self._payment_for(term)}
-        r = self.http.request(method, url, headers=headers, **kw)
+        payment = self._payment_for(term)
+        obj_id = _canon32(_unb64(payment)["id"])
+        headers = {**kw.pop("headers", {}), HDR_PAYMENT: payment}
+        try:
+            r = self.http.request(method, url, headers=headers, **kw)
+        except Exception:
+            self.agent.discard(obj_id)
+            raise
+        if r.status_code == 200:
+            self.agent.confirm(obj_id)
+        else:
+            self.agent.discard(obj_id)
         if HDR_RECEIPT in r.headers:
             self.receipts.append(_unb64(r.headers[HDR_RECEIPT]))
         return r

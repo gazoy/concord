@@ -76,11 +76,13 @@ def test_crew_scenario_on_chain(chain):
     cid = worker.open_channel(provider.address, token, 100, 3600, salt=1)
     for _ in range(3):
         u = worker.pay_channel(cid, 3)
+        worker.confirm(cid)  # the provider accepted it
     assert u["balance"] == 9
     # the worker's commitment is counted up the tree
     assert L.account(w)["spent_in_window"] == 100 and L.account(root)["spent_in_window"] == 100
     # a fourth channel would exceed the worker's window cap of 300 (100 each): three more openings and the fourth fails
-    with pytest.raises(Exception):
+    from foliant.errors import PolicyViolation as PV
+    with pytest.raises(PV):
         for i in range(2, 6):
             worker.open_channel(provider.address, token, 100, 3600, salt=i)
     # provider settles the session in one transaction; orchestrator recalls the rest

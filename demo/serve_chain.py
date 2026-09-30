@@ -35,12 +35,25 @@ def make_app() -> FastAPI:
     gate = ChainGate(L, env["PROVIDER_KEY"], offer)
     if env.get("FOLIANT_POOL_ID"):
         offer.pool_id = bytes.fromhex(env["FOLIANT_POOL_ID"][2:])
+        if L.pool(offer.pool_id)["coordinator"].lower() != provider.lower():
+            raise SystemExit("FOLIANT_POOL_ID is not a pool coordinated by PROVIDER_KEY")
     else:
         offer.pool_id = gate.create_pool(timeout_secs=int(env.get("FOLIANT_POOL_TIMEOUT", "3600")),
                                          salt=int(env.get("FOLIANT_POOL_SALT", "0")))
         print("pool created", _hex(offer.pool_id))
 
-    app = FastAPI(title="Foliant metered API (chain)")
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        yield
+        try:
+            gate.settle()  # settle before stopping so nothing accepted is left unsettled (AUDIT-3 A3-3)
+        except Exception as e:  # noqa: BLE001
+            print("settle on shutdown failed:", e)
+
+    app = FastAPI(title="Foliant metered API (chain)", lifespan=lifespan)
+    settle_key = env.get("FOLIANT_SETTLE_KEY")  # if set, POST /settle needs it in X-Settle-Key
 
     @app.exception_handler(PaymentRequired)
     async def _h(_r, exc):
@@ -65,7 +78,9 @@ def make_app() -> FastAPI:
         return {"ok": True, "unsettled": gate.revenue_unsettled}
 
     @app.post("/settle")
-    def settle():
+    def settle(request: Request):
+        if settle_key and request.headers.get("X-Settle-Key") != settle_key:
+            return JSONResponse(status_code=403, content={"error": "settle key required"})
         total, txs = gate.settle()
         return {"settled": total, "transactions": txs}
 

@@ -23,3 +23,12 @@ def make_agent(L: Ledger, name: str, policy: Policy | None = None, funds: int = 
     a = Agent(L, KeyPair.from_seed(name.encode() + b"o"), KeyPair.from_seed(name.encode() + b"s"), policy)
     L.mint(a.account.address, ASSET, funds)
     return a
+
+
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _gate_state_dir(tmp_path, monkeypatch):
+    """Each test gets its own directory for ChainGate's persisted state (foliant.chain)."""
+    monkeypatch.setenv("FOLIANT_STATE_DIR", str(tmp_path))
