@@ -365,6 +365,13 @@ def test_http_client_is_peer_unless_proxy_trusted(chain, tmp_path):
     # a client-supplied first entry does not help it: only the entry our proxy appended (the last) counts
     r = c.post("/tap", json={"address": Account.create().address}, headers={"X-Forwarded-For": "10.0.0.5, 10.0.0.1"})
     assert r.status_code == 429 and "client" in r.json()["error"]
+    # nor does a second header line: a proxy that adds its own line leaves the visitor's first (XY-1)
+    import httpx
+    raw = [(b"content-type", b"application/json"), (b"x-forwarded-for", b"10.0.0.9"),
+           (b"x-forwarded-for", b"10.0.0.1")]
+    body = json.dumps({"address": Account.create().address}).encode()
+    r = c.send(httpx.Request("POST", c.base_url.join("/tap"), headers=raw, content=body))
+    assert r.status_code == 429 and "client" in r.json()["error"]
 
 
 def test_rpc_error_on_send_with_tx_in_pool_counts_as_broadcast(chain, tmp_path, monkeypatch):
@@ -419,6 +426,7 @@ def test_unconfirmed_transaction_is_recorded_and_named(chain, tmp_path, monkeypa
     from demo.tap import TapError
     L, addrs, _ = chain
     monkeypatch.setattr(tapmod, "RECEIPT_TIMEOUT", 1)
+    monkeypatch.setattr(tapmod, "RECEIPT_POLL", 0.2)  # else one 2 s poll outlasts the 1 s timeout (Y-1)
     tap = _tap(chain, tmp_path)
     w3 = L.w3
     visitor = Account.create().address

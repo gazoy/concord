@@ -67,13 +67,24 @@ def make_app() -> FastAPI:
         print("tap enabled from", tap.address, "balance", Web3.from_wei(tap.balance(), "ether"), "AVAX")
 
     def tap_client(request: Request) -> str:
-        """The caller's IP for the tap's per-client limit (F-1). X-Forwarded-For is client-supplied unless a
-        proxy of ours rewrites it, so it is only believed when FOLIANT_TRUST_PROXY=1, and then its last
-        entry (the one that proxy appended); otherwise the socket peer."""
+        """The caller's IP for the tap's per-client limit (F-1).
+
+        X-Forwarded-For is client-supplied, so it is believed only when FOLIANT_TRUST_PROXY=1, and then
+        only its last entry: the one the proxy in front of us appended. A visitor may send the header, and
+        may send it more than once, so the *last line* of a repeated header is taken as well as the last
+        entry within it (TAP-AUDIT-FINAL-2 XY-1); Starlette's `.get` would return the first line, which is
+        the visitor's if the proxy adds a line rather than appending to theirs.
+
+        This assumes exactly one appending hop in front of the server. Set FOLIANT_TRUST_PROXY=1 only with
+        such a proxy: with none, any visitor forges the header and the per-client cap is gone; with two
+        (a CDN in front of nginx), every visitor shares the middle hop's address and the cap locks everyone
+        out. With nginx, `set_real_ip_from <proxy>; real_ip_header X-Forwarded-For;` and
+        `proxy_set_header X-Forwarded-For $remote_addr;` gives the same result without trusting anything
+        the visitor sent."""
         if trust_proxy:
-            xff = request.headers.get("x-forwarded-for", "")
-            if xff.strip():
-                return xff.split(",")[-1].strip()
+            lines = request.headers.getlist("x-forwarded-for")
+            if lines and lines[-1].strip():
+                return lines[-1].split(",")[-1].strip()
         return request.client.host if request.client else "unknown"
 
     @app.exception_handler(PaymentRequired)
