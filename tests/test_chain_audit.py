@@ -531,3 +531,327 @@ def test_agent_restart_before_provider_settles_is_stuck(chain):  # VERIFY A3-age
         gate.verify(_header("foliant-channel", _pay(fresh, cid, 3)))
     gate.settle()
     assert gate.verify(_header("foliant-channel", _pay(fresh, cid, 3))).paid == 3
+
+
+# ================================================================== Verification, round 2 (commit 6bcca8c)
+
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+from foliant.chain import ChainHttpClient, _check_sig, _canon32
+
+
+def test_v2_check_sig_matches_openzeppelin_set(chain):  # VERIFY-2 A3-1
+    """Gate acceptance set == OZ ECDSA 5.4 tryRecover(bytes32, bytes): 65 bytes, v in {27,28}, 0 < s <= n//2,
+    0 < r < n (r out of range fails recovery in eth_keys, address(0) in ecrecover). 64-byte EIP-2098: both reject."""
+    L, addrs = chain
+    payer = ChainAgent(L, KEYS[1])
+    domain, types = L.channel_update_types()
+    msg = {"channel": b"\x01" * 32, "account": b"\x02" * 32, "seq": 1, "balance": 1}
+    s = payer.key.sign_typed_data(domain, types, msg)
+    r_, s_, v_ = s.r, s.s, s.v
+
+    def sig(r, ss, v):
+        return _hex(r.to_bytes(32, "big") + ss.to_bytes(32, "big") + bytes([v]))
+
+    def contract_ok(sg):
+        return L.channels.functions.settle(b"\x01" * 32, 1, 1, bytes.fromhex(sg[2:])).call
+
+    ok = {sig(r_, s_, v_), sig(r_, SECP_N // 2, v_)}          # canonical, and the boundary s == n//2
+    bad = {sig(r_, SECP_N - s_, 55 - v_), sig(r_, s_, v_ - 27), sig(r_, 0, v_), sig(0, s_, v_), sig(SECP_N, s_, v_),
+           sig(r_, SECP_N // 2 + 1, v_), sig(r_, s_, 29), _hex(bytes.fromhex(sig(r_, s_, v_)[2:])[:64])}
+    for sg in ok:
+        _check_sig(sg)
+    for sg in bad:
+        with pytest.raises(Exception):
+            _check_sig(sg) and Account.recover_message(encode_typed_data(domain, types, msg), signature=bytes.fromhex(sg[2:]))
+    # the contract side of the boundary: s == n//2 passes the S check (fails only on rec != signer for this fake channel)
+    with pytest.raises(Exception) as ei:
+        contract_ok(sig(r_, SECP_N // 2, v_))()
+    assert "NoChannel" in str(ei.value) or "0x" in str(ei.value)  # NoChannel: it got past nothing else; digest irrelevant
+
+
+def test_v2_canonical_ids_and_replay_closed(chain):  # VERIFY-2 A3-2
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    gate = ChainGate(L, KEYS[3], ChainOffer(prov, token, 3), state_dir=None)
+    payer = _funded_agent(L, token, KEYS[1])
+    cid = payer.open_channel(prov, token, 100, 3600, salt=21)
+    u = _pay(payer, cid, 3)
+    up = {**u, "id": "0x" + u["id"][2:].upper()}  # upper-case hex is a valid spelling ...
+    p = gate.verify(_header("foliant-channel", up))
+    assert p.update["id"] == u["id"] and list(gate.latest) == [f"foliant-channel:{u['id']}:{u['account']}"]
+    for spelled in (u, up, {**u, "id": "0X" + u["id"][2:]}, {**u, "id": u["id"][2:]}, {**u, "id": u["id"] + "00"}):
+        with pytest.raises(PaymentRequired):
+            gate.verify(_header("foliant-channel", spelled))
+    for bad in ("0x" + "0" * 63, "0x" + "g" * 64, 12, None, b"\x00" * 32):
+        with pytest.raises(Exception):  # FoliantError or ValueError; verify() turns either into a 402
+            _canon32(bad)
+
+
+def test_v2_state_survives_restart_and_is_pruned_on_settle(chain, tmp_path):  # VERIFY-2 A3-3
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    offer = ChainOffer(prov, token, 3)
+    gate = ChainGate(L, KEYS[3], offer, state_dir=str(tmp_path))
+    payer = _funded_agent(L, token, KEYS[1])
+    cid = payer.open_channel(prov, token, 100, 3600, salt=22)
+    ups = [_pay(payer, cid, 3) for _ in range(3)]
+    for u in ups:
+        gate.verify(_header("foliant-channel", u))
+    gate2 = ChainGate(L, KEYS[3], offer, state_dir=str(tmp_path))  # restart
+    assert gate2.revenue_unsettled == 9 and len(gate2.latest) == 1
+    for u in ups:
+        with pytest.raises(PaymentRequired):
+            gate2.verify(_header("foliant-channel", u))
+    total, txs = gate2.settle()
+    assert total == 9 and len(txs) == 1
+    assert gate2.latest == {} and gate2.revenue_unsettled == 0
+    saved = json.loads(gate2.state_path.read_text())
+    assert saved == {"latest": {}, "revenue_unsettled": 0}  # file does not grow: settled entries are pruned
+    assert gate2.state_path.name.startswith(f"foliant-gate-{L.chain_id}-{prov.lower()}-")
+
+
+def test_v2_corrupt_state_file_fails_closed(chain, tmp_path):  # VERIFY-2 A3-3 (documented behaviour)
+    L, addrs = chain
+    prov = Account.from_key(KEYS[3]).address
+    offer = ChainOffer(prov, addrs["token"], 3)
+    g = ChainGate(L, KEYS[3], offer, state_dir=str(tmp_path))
+    g.state_path.write_text('{"latest": {"foliant-chan')  # partial write
+    with pytest.raises(Exception):
+        ChainGate(L, KEYS[3], offer, state_dir=str(tmp_path))  # refuses to start rather than starting empty (safe)
+
+
+def test_v2_two_processes_on_one_state_file_replay(chain, tmp_path):  # FINDING A3-10
+    """Two gate processes (uvicorn --workers 2, or an old and a new process during a rolling restart) load the
+    file at start and never re-read it: each accepts every update once, and the last writer's memory
+    overwrites the other's accepted entries on disk. Persistence closes the restart replay, not this one."""
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    offer = ChainOffer(prov, token, 3)
+    A = ChainGate(L, KEYS[3], offer, state_dir=str(tmp_path))
+    B = ChainGate(L, KEYS[3], offer, state_dir=str(tmp_path))  # second worker, same file
+    payer = _funded_agent(L, token, KEYS[1])
+    cid = payer.open_channel(prov, token, 100, 3600, salt=23)
+    cid2 = payer.open_channel(prov, token, 100, 3600, salt=24)
+    u1, u2 = _pay(payer, cid, 3), _pay(payer, cid2, 3)
+    A.verify(_header("foliant-channel", u1))
+    A.verify(_header("foliant-channel", u2))
+    replayed = 0
+    try:
+        B.verify(_header("foliant-channel", u1))  # B does not know A accepted it
+        replayed += 1
+    except PaymentRequired:
+        pass
+    C = ChainGate(L, KEYS[3], offer, state_dir=str(tmp_path))  # restart after B's last save
+    lost = [k for k in A.latest if k not in C.latest]
+    assert replayed == 0 and not lost, f"replayed once in worker B; entries lost from disk after B's save: {lost}"
+
+
+def test_v2_concurrent_accepts_consume_payments_without_serving(chain, tmp_path):  # FINDING A3-15
+    """The dependency is sync, so FastAPI runs verify() on a threadpool. Every accept writes the same
+    `<state>.tmp` then os.replace()s it: two threads interleave (A truncates, B truncates, A renames, B's
+    rename finds no tmp) and _save raises FileNotFoundError AFTER `latest`/`revenue_unsettled` were mutated.
+    verify() turns it into a 402 whose body leaks the filesystem path: the payment is consumed (stale on
+    retry) and the call is not served. Seen 2-4 times in 8 concurrent valid requests on this machine."""
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    gate = ChainGate(L, KEYS[3], ChainOffer(prov, token, 3), state_dir=str(tmp_path))
+    payer = _funded_agent(L, token, KEYS[1])
+    cids = [payer.open_channel(prov, token, 100, 3600, salt=30 + i) for i in range(8)]
+    hdrs = [_header("foliant-channel", _pay(payer, c, 3)) for c in cids]
+    tc = _app(gate)
+    with ThreadPoolExecutor(16) as ex:
+        rs = list(ex.map(lambda h: tc.post("/infer", content=b"x", headers={HDR_PAYMENT: h}), hdrs))
+    codes = [r.status_code for r in rs]
+    assert 500 not in codes
+    assert len(gate.latest) == 8 and gate.revenue_unsettled == 24   # all eight were accepted ...
+    errors = [r.json()["error"] for r in rs if r.status_code != 200]
+    assert codes.count(200) == 8, f"{len(errors)} consumed but not served: {errors[:1]}"
+
+
+def test_v2_price_change_orphans_state_and_replays(chain, tmp_path):  # FINDING A3-11
+    """The state file name embeds offer.id (provider, token, price, pool). Restarting with a different
+    FOLIANT_PRICE (or token) starts from an empty file: every unsettled update replays once, and the old file's
+    entries are never settled by the new gate."""
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    gate = ChainGate(L, KEYS[3], ChainOffer(prov, token, 3), state_dir=str(tmp_path))
+    payer = _funded_agent(L, token, KEYS[1])
+    cid = payer.open_channel(prov, token, 100, 3600, salt=25)
+    u = _pay(payer, cid, 3)
+    gate.verify(_header("foliant-channel", u))
+    gate2 = ChainGate(L, KEYS[3], ChainOffer(prov, token, 2), state_dir=str(tmp_path))  # price lowered on restart
+    with pytest.raises(PaymentRequired):
+        gate2.verify(_header("foliant-channel", u))
+
+
+def test_v2_pool_entries_settle_against_offer_pool_not_their_own(chain, tmp_path):  # FINDING A3-12
+    """settle() re-checks a pool entry against ITS pool (obj_id) but sends the batch to self.offer.pool_id.
+    serve_chain constructs the gate (loading state) before the pool id is set, so after a crash + restart with
+    a new FOLIANT_POOL_SALT/POOL_ID the old pool's entries are sent to the new pool, skipped there as
+    non-members, and dropped from state: the revenue is silently abandoned."""
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    offer = ChainOffer(prov, token, 3)
+    gate = ChainGate(L, KEYS[3], offer, state_dir=str(tmp_path))
+    old_pid = gate.create_pool(timeout_secs=3600, salt=26)
+    payer = _funded_agent(L, token, KEYS[1])
+    payer.join_pool(old_pid, 30)
+    gate.verify(_header("foliant-pool", _pay(payer, old_pid, 3)))
+    # crash; restart with a new pool (offer.id at construction has pool None, so the same state file loads)
+    offer2 = ChainOffer(prov, token, 3)
+    gate2 = ChainGate(L, KEYS[3], offer2, state_dir=str(tmp_path))
+    assert len(gate2.latest) == 1
+    gate2.create_pool(timeout_secs=3600, salt=27)
+    total, txs = gate2.settle()
+    assert L.claim(old_pid, payer.account_id)["paid"] == 3, f"old pool never settled (total {total}); entry dropped: {gate2.latest == {}}"
+
+
+def test_v2_transient_rpc_error_drops_channel_entry(chain, tmp_path):  # FINDING A3-13
+    """settle() drops a channel entry when L.channel() raises anything (line 532-535), not only NoChannel.
+    One failed RPC read (timeout, 502 from the node) permanently discards accepted revenue."""
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    gate = ChainGate(L, KEYS[3], ChainOffer(prov, token, 3), state_dir=str(tmp_path))
+    payer = _funded_agent(L, token, KEYS[1])
+    cid = payer.open_channel(prov, token, 100, 3600, salt=28)
+    gate.verify(_header("foliant-channel", _pay(payer, cid, 3)))
+    real = L.channel
+    calls = {"n": 0}
+
+    def flaky(c):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionError("node hiccup")
+        return real(c)
+
+    L.channel = flaky
+    try:
+        try:
+            gate.settle()
+        except ConnectionError:
+            pass
+        total, txs = gate.settle()  # node is back
+    finally:
+        L.channel = real
+    assert L.channel(cid)["paid"] == 3, "entry dropped on a transient error; revenue abandoned"
+
+
+def test_v2_front_run_self_settle_keeps_accounting_right(chain, tmp_path):  # VERIFY-2 settle robustness
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    gate = ChainGate(L, KEYS[3], ChainOffer(prov, token, 3), state_dir=str(tmp_path))
+    pid = gate.create_pool(timeout_secs=1, salt=29)
+    honest = _funded_agent(L, token, KEYS[1])
+    evil = _funded_agent(L, token, KEYS[2])
+    honest.join_pool(pid, 30)
+    evil.join_pool(pid, 30)
+    gate.verify(_header("foliant-pool", _pay(honest, pid, 3)))
+    ue = _pay(evil, pid, 3)
+    gate.verify(_header("foliant-pool", ue))
+    # evil self-applies a HIGHER update via beginExit, then finalizes and rejoins (epoch 2) before the provider settles
+    ue2 = _pay(evil, pid, 3)
+    evil._send(L.pools.functions.beginExit(pid, evil.account_id, ue2["seq"], ue2["balance"], bytes.fromhex(ue2["sig"][2:])))
+    _warp(L, 3)
+    evil.finalize_exit(pid)
+    evil.join_pool(pid, 30)
+    before = L.token(token).functions.balanceOf(prov).call()
+    total, txs = gate.settle()
+    after = L.token(token).functions.balanceOf(prov).call()
+    assert L.claim(pid, honest.account_id)["paid"] == 3          # honest member settled
+    assert total == after - before == 3 and len(txs) == 1        # total is the real delta; evil's 6 came via beginExit
+    assert gate.latest == {}                                     # evil's stale-epoch entry pruned, not retried forever
+    # channel: payer self-settles a higher update between the gate's pre-check and its tx -> StaleUpdate -> kept, then pruned
+    payer = _funded_agent(L, token, KEYS[4])
+    cid = payer.open_channel(prov, token, 100, 3600, salt=29)
+    u1 = _pay(payer, cid, 3)
+    gate.verify(_header("foliant-channel", u1))
+    u2 = _pay(payer, cid, 3)
+    real = L.channel
+
+    def front_run(c):
+        ch = real(c)
+        if ch["paid"] == 0:
+            payer._send(L.channels.functions.settle(c, u2["seq"], u2["balance"], bytes.fromhex(u2["sig"][2:])))
+        return ch
+
+    L.channel = front_run
+    try:
+        total, txs = gate.settle()
+    finally:
+        L.channel = real
+    assert total == 0 and txs == [] and len(gate.latest) == 1   # tx reverted StaleUpdate: kept, nothing counted
+    total, txs = gate.settle()
+    assert total == 0 and gate.latest == {}                     # next call prunes it
+
+
+def test_v2_pending_confirm_and_dropped_response(chain, tmp_path):  # VERIFY-2 A3-9 (+ documents the stuck case)
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    gate = ChainGate(L, KEYS[3], ChainOffer(prov, token, 3), state_dir=str(tmp_path))
+    payer = _funded_agent(L, token, KEYS[1])
+    cid = payer.open_channel(prov, token, 100, 3600, salt=40)
+    payer.pay_channel(cid, 3)  # never delivered: pending
+    payer.discard(cid)
+    p = gate.verify(_header("foliant-channel", payer.pay_channel(cid, 3)))
+    payer.confirm(cid)
+    assert p.paid == 3
+    # accepted by the gate, response lost: client discards, re-signs at the same balance, gate says stale
+    u = payer.pay_channel(cid, 3)
+    gate.verify(_header("foliant-channel", u))
+    payer.discard(cid)
+    with pytest.raises(PaymentRequired) as ei:
+        gate.verify(_header("foliant-channel", payer.pay_channel(cid, 3)))
+    assert ei.value.terms["error"] == "stale update"
+    # recovery that is always safe: "stale" can only mean the gate holds the update the client signed last,
+    # so promote the discarded one and pay again (one call's price lost, bounded per incident)
+    payer.pending[cid] = u
+    payer.confirm(cid)
+    assert gate.verify(_header("foliant-channel", payer.pay_channel(cid, 3))).paid == 3
+
+
+def test_v2_http_client_opens_a_channel_per_failed_first_call(chain, tmp_path):  # FINDING A3-14
+    """Channel reuse scans agent.latest (confirmed updates only). If the first call on a fresh channel is
+    refused, the channel is never in `latest`, so every retry opens another channel: a deposit commit and a
+    policy-window spend per failure, until per_window_max is exhausted."""
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    gate = ChainGate(L, KEYS[3], ChainOffer(prov, token, 3), state_dir=str(tmp_path))
+    payer = _funded_agent(L, token, KEYS[1])
+    tc = _app(gate)
+    client = ChainHttpClient(payer, tc, default_deposit=30, prefer_pool=False)
+    real_verify = gate.verify
+    gate.verify = lambda h: (_ for _ in ()).throw(PaymentRequired({**gate.terms(), "error": "temporarily unavailable"}))
+    n0 = L.w3.eth.get_transaction_count(payer.address)
+    for _ in range(3):
+        assert client.request("POST", "/infer", content=b"x").status_code == 402
+    gate.verify = real_verify
+    opened = L.w3.eth.get_transaction_count(payer.address) - n0
+    assert opened == 1, f"{opened} channels opened for 3 refused calls"
+
+
+def test_v2_decoded_reverts(chain):  # VERIFY-2 A3-8
+    from foliant.errors import InsufficientFunds, PolicyViolation
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    payer = _funded_agent(L, token, KEYS[1], amount=500, policy=ChainPolicy(100, 1000, 3600))
+    with pytest.raises(PolicyViolation, match="per_tx_max"):
+        payer.open_channel(prov, token, 200, 3600, salt=41)
+    poor = _funded_agent(L, token, KEYS[2], amount=50, policy=ChainPolicy(100, 1000, 3600))
+    with pytest.raises(InsufficientFunds):
+        poor.open_channel(prov, token, 60, 3600, salt=42)
+    with pytest.raises(FoliantError):
+        payer.open_channel(prov, token, 10, 0, salt=43)  # BadUpdate("timeout out of range") -> FoliantError

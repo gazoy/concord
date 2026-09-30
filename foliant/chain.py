@@ -17,8 +17,11 @@ Requires the `chain` extra: pip install "foliant-protocol[chain]".
 from __future__ import annotations
 
 import base64
+import fcntl
 import json
 import os
+import tempfile
+import threading
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
@@ -242,6 +245,7 @@ class ChainAgent:
         self.account_id: Optional[bytes] = account_id
         self.latest: dict[bytes, dict] = {}   # channel/pool id -> last update the provider accepted
         self.pending: dict[bytes, dict] = {}  # channel/pool id -> last update signed but not yet confirmed
+        self.discarded: dict[bytes, dict] = {}  # last update discarded per object, in case the provider did accept it
         self._seq: dict[bytes, int] = {}
 
     # transactions
@@ -335,14 +339,20 @@ class ChainAgent:
         self._seq[cid], self.pending[cid] = seq, u
         return u
 
-    def confirm(self, obj_id: bytes) -> None:
-        """The provider accepted the pending update: it is now what the agent owes."""
-        if obj_id in self.pending:
-            self.latest[obj_id] = self.pending.pop(obj_id)
+    def confirm(self, obj_id: Optional[bytes]) -> None:
+        """The provider accepted the pending update: it is now what the agent owes. If nothing is pending,
+        the last discarded update is confirmed instead (a response that was lost after acceptance)."""
+        if obj_id is None:
+            return
+        u = self.pending.pop(obj_id, None) or self.discarded.pop(obj_id, None)
+        if u is not None:
+            self.latest[obj_id] = u
 
     def discard(self, obj_id: bytes) -> None:
-        """The pending update was not accepted; forget it."""
-        self.pending.pop(obj_id, None)
+        """The pending update was not accepted (as far as we know); set it aside."""
+        u = self.pending.pop(obj_id, None)
+        if u is not None:
+            self.discarded[obj_id] = u
 
     def pay_pool(self, pid: bytes, amount: int) -> dict:
         claim = self.L.claim(pid, self.account_id)
@@ -406,21 +416,45 @@ class ChainGate:
         self.offer = offer
         self.latest: dict[str, dict] = {}  # "scheme:0xid:0xaccount" (canonical lower-case hex) -> update
         self.revenue_unsettled = 0
+        self._lock = threading.Lock()  # one accept or settle at a time within the process (A3-15)
         self.state_path: Optional[Path] = None
         if state_dir is not None:
             d = Path(state_dir or os.environ.get("FOLIANT_STATE_DIR", "."))
-            self.state_path = d / f"foliant-gate-{self.L.chain_id}-{self.key.address.lower()}-{self.offer.id[2:10]}.json"
-            if self.state_path.exists():
-                saved = json.loads(self.state_path.read_text())
-                self.latest = saved.get("latest", {})
-                self.revenue_unsettled = saved.get("revenue_unsettled", 0)
+            # named by chain, provider and token only, so a price change does not orphan entries (A3-11)
+            self.state_path = d / f"foliant-gate-{self.L.chain_id}-{self.key.address.lower()}-{self.offer.token.lower()}.json"
+            self._load()
+
+    def _load(self) -> None:
+        if self.state_path is not None and self.state_path.exists():
+            saved = json.loads(self.state_path.read_text())  # a corrupt file raises: fail closed, recover by hand
+            self.latest = saved.get("latest", {})
+            self.revenue_unsettled = saved.get("revenue_unsettled", 0)
 
     def _save(self) -> None:
         if self.state_path is None:
             return
-        tmp = self.state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"latest": self.latest, "revenue_unsettled": self.revenue_unsettled}))
+        fd, tmp = tempfile.mkstemp(prefix=self.state_path.name, dir=self.state_path.parent)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"latest": self.latest, "revenue_unsettled": self.revenue_unsettled}, f)
         os.replace(tmp, self.state_path)
+
+    class _FileLock:
+        """Cross-process exclusive lock on the state file's directory entry (A3-10)."""
+
+        def __init__(self, path: Optional[Path]):
+            self.path = path.with_suffix(".lock") if path else None
+            self.fd = None
+
+        def __enter__(self):
+            if self.path is not None:
+                self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+                fcntl.flock(self.fd, fcntl.LOCK_EX)
+            return self
+
+        def __exit__(self, *exc):
+            if self.fd is not None:
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+                os.close(self.fd)
 
     def terms(self) -> dict:
         base = {"scheme": "foliant-channel", "network": self.L.network, "payTo": self.offer.provider,
@@ -435,6 +469,11 @@ class ChainGate:
     def verify(self, header: Optional[str]) -> ChainPayment:
         if not header:
             raise PaymentRequired(self.terms())
+        with self._lock, self._FileLock(self.state_path):
+            self._load()  # another process may have accepted since we last looked (A3-10)
+            return self._verify_locked(header)
+
+    def _verify_locked(self, header: str) -> ChainPayment:
         try:
             p = _unb64(header)
             scheme, u = p["scheme"], p["update"]
@@ -474,9 +513,14 @@ class ChainGate:
             paid = u["balance"] - last_bal
             if paid < self.offer.price_per_unit:
                 raise FoliantError(f"underpaid: {paid} < {self.offer.price_per_unit}")
+            prev_latest, prev_rev = dict(self.latest), self.revenue_unsettled
             self.latest[key] = u
             self.revenue_unsettled += paid
-            self._save()
+            try:
+                self._save()
+            except OSError:
+                self.latest, self.revenue_unsettled = prev_latest, prev_rev  # nothing accepted if not persisted
+                raise FoliantError("provider state unavailable, retry")
             return ChainPayment(scheme, obj_id, acct, u, paid)
         except PaymentRequired:
             raise
@@ -522,17 +566,18 @@ class ChainGate:
         fails is kept for the next call without blocking the others; a pool batch that reverts falls back to
         one transaction per member so a single bad entry cannot block the rest (AUDIT-3 A3-5/6/7).
         """
+        with self._lock, self._FileLock(self.state_path):
+            self._load()
+            return self._settle_locked()
+
+    def _settle_locked(self) -> tuple[int, list[str]]:
         total, txs = 0, []
-        pool_batch: list[tuple[str, tuple]] = []
+        batches: dict[bytes, list[tuple[str, tuple]]] = {}  # pool id -> entries (A3-12)
         for key, u in list(self.latest.items()):
             scheme, obj_hex, _ = key.split(":", 2)
             obj_id = bytes.fromhex(obj_hex[2:])
             if scheme == "foliant-channel":
-                try:
-                    ch = self.L.channel(obj_id)
-                except Exception:
-                    self.latest.pop(key, None)
-                    continue
+                ch = self.L.channel(obj_id)  # an accepted entry's channel exists; an RPC error propagates (A3-13)
                 if ch["closed"] or u["balance"] <= ch["paid"]:
                     self.latest.pop(key, None)  # settled (perhaps by someone else) or gone: nothing to do
                     continue
@@ -549,19 +594,19 @@ class ChainGate:
                 if claim is None or claim["exited"] or claim["epoch"] != u.get("epoch") or u["balance"] <= claim["paid"]:
                     self.latest.pop(key, None)
                     continue
-                pool_batch.append((key, (acct, u["seq"], u["balance"], bytes.fromhex(u["sig"][2:]))))
-        if pool_batch:
-            token = self.L.token(self.offer.token)
+                batches.setdefault(obj_id, []).append((key, (acct, u["seq"], u["balance"], bytes.fromhex(u["sig"][2:]))))
+        token = self.L.token(self.offer.token)
+        for pid, pool_batch in batches.items():
             before = token.functions.balanceOf(self.key.address).call()
             try:
-                r = self._send(self.L.pools.functions.settle(self.offer.pool_id, [t for _, t in pool_batch]))
+                r = self._send(self.L.pools.functions.settle(pid, [t for _, t in pool_batch]))
                 txs.append(r["transactionHash"].hex())
                 for key, _ in pool_batch:
                     self.latest.pop(key, None)
             except FoliantError:
                 for key, t in pool_batch:  # one bad entry must not block the rest
                     try:
-                        r = self._send(self.L.pools.functions.settle(self.offer.pool_id, [t]))
+                        r = self._send(self.L.pools.functions.settle(pid, [t]))
                         txs.append(r["transactionHash"].hex())
                         self.latest.pop(key, None)
                     except FoliantError:
@@ -584,6 +629,7 @@ class ChainHttpClient:
         self.agent, self.http = agent, http
         self.default_deposit, self.prefer_pool, self.timeout_secs = default_deposit, prefer_pool, timeout_secs
         self.receipts: list[dict] = []
+        self.channels: list[bytes] = []  # channels this client opened, confirmed or not (A3-14)
 
     def _choose(self, accepts: list[dict]) -> dict:
         if self.prefer_pool:
@@ -606,17 +652,17 @@ class ChainHttpClient:
             return _b64({"scheme": "foliant-pool", "id": term["poolId"], "update": agent.pay_pool(pid, price)})
         # channel: reuse the last open one to this payee with room, else open another
         cid = None
-        for k, u in agent.latest.items():
-            if u["kind"] != "channel":
-                continue
+        for k in self.channels:
             ch = agent.L.channel(k)
+            owed = agent.latest[k]["balance"] if k in agent.latest else ch["paid"]
             if ch["payee"].lower() == term["payTo"].lower() and not ch["closed"] and not ch["closing_at"] \
-                    and u["balance"] + price <= ch["deposit"]:
+                    and owed + price <= ch["deposit"]:
                 cid = k
                 break
         if cid is None:
             cid = agent.open_channel(term["payTo"], term["asset"], self.default_deposit, self.timeout_secs,
                                      salt=int.from_bytes(os.urandom(8), "big"))
+            self.channels.append(cid)
         return _b64({"scheme": "foliant-channel", "id": _hex(cid), "update": agent.pay_channel(cid, price)})
 
     def request(self, method: str, url: str, **kw):
@@ -624,9 +670,19 @@ class ChainHttpClient:
         if r.status_code != 402:
             return r
         term = self._choose(r.json()["accepts"])
+        headers = kw.pop("headers", {})
+        r = self._pay_once(method, url, term, headers, kw)
+        if r.status_code == 402 and str(r.json().get("error", "")).startswith("stale update"):
+            # the gate holds an update we discarded (a dropped response): it can only be our pending one,
+            # since we never sign above it. Confirm it and pay once more; cost bounded to one call's price.
+            self.agent.confirm(_canon32(_unb64(headers[HDR_PAYMENT])["id"]))
+            r = self._pay_once(method, url, term, headers, kw)
+        return r
+
+    def _pay_once(self, method, url, term, headers, kw):
         payment = self._payment_for(term)
         obj_id = _canon32(_unb64(payment)["id"])
-        headers = {**kw.pop("headers", {}), HDR_PAYMENT: payment}
+        headers[HDR_PAYMENT] = payment
         try:
             r = self.http.request(method, url, headers=headers, **kw)
         except Exception:

@@ -316,3 +316,84 @@ fuzz, A2-6/A2-8 docs) still stand and are outside this file's scope.
 | I-1 | Nonces are taken from the pending block. |
 
 `tests/test_chain_audit.py` now asserts the fixed behaviour (one reproduction is skipped as moot); 58 Python tests pass. Verification by the auditor follows.
+
+## Verification, round 2 (auditor, 30 Sep 2026, commit 6bcca8c)
+
+Method: re-read the full `foliant/chain.py` and `demo/serve_chain.py` at 6bcca8c and the author's changes
+to the tests; probed `_check_sig` against OpenZeppelin 5.4 `ECDSA.tryRecover` on the boundaries; attacked
+the four new mechanisms (state file, per-entry settlement, pending/confirm, revert decoding) by hand and
+with 13 new tests appended to `tests/test_chain_audit.py` (`# VERIFY-2` / `# FINDING A3-10..15`).
+`tests/test_chain.py`: 2 of 2. `tests/test_chain_audit.py`: 28 pass, 1 skipped (the A3-1 pool-brick
+reproduction, moot), 6 fail = the six new findings below. `foliant/` and `contracts/src/` untouched.
+
+### Status of round-1 findings
+
+| Finding | Status | Evidence |
+| --- | --- | --- |
+| A3-1 High, non-canonical signatures | **Closed** | `_check_sig` (52-61) runs before recovery and again in `verify` (444). Acceptance set equals OZ 5.4 `tryRecover(bytes32,bytes)`: 65 bytes only (OZ 5 dropped the 64-byte EIP-2098 path; the gate requires 132 hex chars, so both reject compact signatures); `v ∈ {27,28}`; `0 < s ≤ n//2` — the boundary `s == n//2` (`0x7FFF…20A0`) is accepted by both, `n//2 + 1` rejected by both; `s == 0` rejected explicitly; `r == 0` or `r ≥ n` are not checked by the gate but eth_keys raises `BadSignature` on them, which `verify` turns into a 402, matching OZ's `address(0)` → `InvalidSignature`. (`test_v2_check_sig_matches_openzeppelin_set`; the original A3-1 tests now pass.) |
+| A3-2 High, non-canonical keys | **Closed** | `_canon32` (39-43) requires `0x` + 64 hex; upper-case hex is accepted as input and rewritten to lower-case (445) before keying and the payer comparison; `0X`, missing prefix, wrong length, non-hex are refused. Replay under any spelling is refused (`test_v2_canonical_ids_and_replay_closed`). Note the receipt's `updateId` is now over the canonical form, so a client that sent upper-case ids must canonicalise before recomputing it. |
+| A3-3 Medium, restart replay | **Closed for a single process; see A3-10, A3-11, A3-15** | State is saved after every accept and settle by write-to-tmp + `os.replace`, loaded at construction; entries are pruned on settle so the file does not grow (`test_v2_state_survives_restart_and_is_pruned_on_settle`: after settle the file is `{"latest": {}, "revenue_unsettled": 0}`). A corrupt or partial file makes the constructor raise (`json.loads`), i.e. the server refuses to start rather than starting empty — the safe direction; recovery is manual (`test_v2_corrupt_state_file_fails_closed`). `serve_chain.py` settles in the lifespan shutdown hook. |
+| A3-4 Low, 500 on malformed headers | **Closed** | Types, ranges and signature form are checked at 441-444 before any RPC or recovery; `except Exception` at 483. All eight malformed cases are 402. One residual: the 402 body carries `str(e)` verbatim, which for an OS error includes a filesystem path (see A3-15). |
+| A3-5 Medium, closed channel blocks settle | **Closed** | Per-entry: closed or already-reached entries are pruned (536-538); a failing tx keeps the entry and continues (541-542). Verified with the front-run case: a payer self-settling a higher update between the pre-check and the tx makes the tx revert `StaleUpdate`; the entry is kept, nothing is counted in `total`, and the next call prunes it (`test_v2_front_run_self_settle_keeps_accounting_right`). |
+| A3-6 Medium, rejoin bricks pool batch | **Closed** | Pre-check drops entries whose claim is gone, exited, re-epoched or already at the balance (549-551); a reverting batch falls back to per-member transactions and drops the unsettleable one (561-568). Exit-with-higher-update + finalize + rejoin before settlement: honest member settled, `total` equals the token delta (the attacker's balance arrived via `beginExit`, correctly not counted), attacker's entry pruned, nothing retried forever. Can an attacker cause an honest entry to be dropped? Only a per-member tx failure drops an entry, and an honest member's single-update `settle` can only revert on bad signature or balance > deposit, both impossible for a gate-accepted update; `StaleUpdate` is a skip, not a revert, in `Pools.settle`. Forcing the fallback costs the attacker an exit cycle per attempt and costs the provider N transactions instead of one — bounded gas griefing, acceptable. |
+| A3-7 Low, no-op pool tx and open /settle | **Closed** | Pool entries at or below `paid` are pruned and no transaction is sent for an empty batch; `X-Settle-Key` optional auth. Default remains open; set `FOLIANT_SETTLE_KEY` on anything public. |
+| A3-8 Low, error type | **Closed** | `_decode_revert` maps `PolicyViolation(string)` (with the reason), `InsufficientFunds`, other custom errors → `FoliantError` (`test_v2_decoded_reverts`); `test_chain.py` now asserts `PolicyViolation`. |
+| A3-9 Low, agent overpays after a refused call | **Closed; see A3-14 and the recovery note** | `pending`/`confirm`/`discard`; re-signing without confirming re-signs at the same balance (`test_v2_pending_confirm_and_dropped_response`). |
+| I-1 nonce | Improved | `"pending"` block; still no lock, so truly concurrent sends from one key can collide. Single-threaded agent use only. |
+| I-3 coordinator check | Closed | `serve_chain.py` 38-39 exits if `FOLIANT_POOL_ID` is not coordinated by `PROVIDER_KEY`. |
+
+### New findings
+
+**A3-10 Medium (config-dependent): two processes on one state file each accept every update once, and the last saver's memory overwrites the other's entries on disk.** Lines 413-416 (loaded once), 418-423 (whole-file replace). `uvicorn --workers 2`, or an old and a new process overlapping during a restart, or two services for one provider key/offer on one host: worker A accepts u1 and u2, worker B (loaded before) accepts u1 again and saves `{u1}` — u2 is gone from disk, and a later restart replays it too (`test_v2_two_processes_on_one_state_file_replay`). This is not a window, it is the whole session: each worker serves each update once. Fix: take an exclusive `fcntl.flock` on the state file around read-modify-write in `verify` and `settle` (re-load `latest` inside the lock before the staleness check, save, release), or refuse to start when the file is locked by another process. Until then, "single worker" is a hard requirement, not a recommendation; enforce it in `serve_chain.py` by never passing `workers`.
+
+**A3-11 Low: the state file name embeds `offer.id`, so a restart with a different `FOLIANT_PRICE` (or token) starts from an empty state; every unsettled update replays once and the old file's entries are never settled.** Line 412 (`self.offer.id[2:10]` in the name), `ChainOffer.id` (378-380) includes the price. `test_v2_price_change_orphans_state_and_replays`. Fix: name the file by chain id + provider (+ token) only — the price is not part of what makes an accepted update unsettled — and keep the offer id inside the file for information; on load, entries for another offer are still valid updates to settle.
+
+**A3-12 Low: pool entries are settled against `self.offer.pool_id`, not the pool in their key, and `serve_chain.py` loads the state before the pool id is known.** Lines 557, 564 (`self.offer.pool_id`) vs 548 (pre-check against `obj_id` from the key); `serve_chain.py` 35 vs 37-43; `ChainOffer.id` at construction has `pool=None`, so the same file loads whatever pool is chosen afterwards. After a crash (the shutdown settle did not run) and a restart with a new `FOLIANT_POOL_SALT`/`FOLIANT_POOL_ID`, the old pool's entries pass the pre-check on the old pool, are sent to the new pool, skipped by the contract as non-members, and popped as "settled": revenue abandoned without a trace (`test_v2_pool_entries_settle_against_offer_pool_not_their_own`: old claim `paid` stays 0, `latest` empty, `total` 0). Fix: group the batch by the key's pool id and call `settle(obj_id, …)` per pool; nothing about `settle` needs `offer.pool_id`.
+
+**A3-13 Medium: a transient RPC error while re-checking a channel entry deletes it.** Lines 531-535: `except Exception: self.latest.pop(key)`. Any `ConnectionError`, timeout or node 5xx during `L.channel()` discards accepted, unsettled revenue permanently (`test_v2_transient_rpc_error_drops_channel_entry`). The intent was `NoChannel`; that revert cannot happen for a gate-accepted entry anyway (`verify` read the channel), so the clause should simply not catch. Fix: let the exception propagate (state is saved only on success, so nothing is lost), or catch only `ContractCustomError` with the `NoChannel` selector.
+
+**A3-14 Low: `ChainHttpClient` opens a new channel for every refused first call.** Lines 609-619: reuse scans `agent.latest`, which after A3-9 holds only *confirmed* updates; a fresh channel whose first payment is refused (any 402/5xx, a network error) is never in `latest`, so the next request opens another channel — a deposit commit and a policy-window spend each time (`test_v2_http_client_opens_a_channel_per_failed_first_call`: 3 refusals → 3 channels). The round-1 code had the same scan but `latest` was written unconditionally, which hid it. Fix: keep a separate `agent.channels: set[bytes]` (populated by `open_channel`) and scan that, taking the baseline balance from `latest` if present else on-chain `paid`.
+
+**A3-15 Medium: concurrent accepts corrupt each other's save and consume payments without serving them.** Lines 418-423 (one shared `.tmp` path), 477-479 (`latest`/`revenue_unsettled` mutated before `_save`), 483-484 (the resulting `FileNotFoundError` becomes a 402 whose body is `"[Errno 2] No such file or directory: '<state path>.tmp' -> '<state path>.json'"`). The dependency is a sync function, so FastAPI runs `verify` on a threadpool; with two accepts in flight, thread A truncates and writes `.tmp`, thread B truncates the same inode, A renames it into place, B writes into the (now live) state file and its own `os.replace` fails. Observed 2-4 failures in 8 concurrent valid requests (`test_v2_concurrent_accepts_consume_payments_without_serving`: all 8 in `latest`, `revenue_unsettled == 24`, only 4-6 served). The client discards its pending update, re-signs at the same balance, and is told "stale" (the stuck case in the note below); the provider keeps the money. The state file itself survives (the winner's content is coherent), but the 402 leaks a server path. The same missing lock also leaves the `prev` read (468) and the write (477) unguarded, a much narrower double-accept window under the GIL that the fix below closes too. Fix: a `threading.Lock` held from the `prev` read through `_save`; a per-writer tmp name (`f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"`); mutate `latest` only after the save succeeds (or roll back on failure); do not echo `OSError` text to clients.
+
+### pending/confirm: the dropped-response case (item 3)
+
+When the gate accepts and the client never sees the 200 (connection drop after commit, or a handler 5xx — the gate commits before the handler runs, I-5), the client discards its pending update and re-signs at the same balance; the gate answers `stale update`; nothing in `ChainHttpClient` retries, so the caller sees a 402 until the provider settles (the agent restarts from on-chain `paid` only when it has no `latest`, and here it does). Acceptable for the demo; not for a client that must make progress. Recommended recovery, safe by construction: a `stale update` 402 can only mean the gate holds a balance ≥ the client's last *signed* one, and the client never signs above its pending update, so the gate's latest is exactly the discarded pending. `ChainHttpClient.request` should, on a 402 whose `error` is `stale update` immediately after a discard, `confirm` the discarded update instead and pay again, once. Cost: one call's price per incident, bounded, never more than the client itself signed; a malicious gate gains nothing it did not already hold. Optionally the gate can put `lastAccepted: {id, account, balance}` in the stale 402 so the client can assert it equals its discarded update before confirming. (`test_v2_pending_confirm_and_dropped_response` demonstrates both the stuck state and this recovery by hand.)
+
+### Verdict
+
+A3-1 through A3-9 are closed as described, with the signature acceptance set proven equal to the contracts'
+on the boundaries, the canonical keys replay-proof under every spelling tried, and the per-entry settlement
+surviving the exit/rejoin, closed-channel and front-run sequences with correct `total` accounting.
+
+The six new findings are all in the two new mechanisms and are all small: A3-13 is a one-line `except`
+to delete; A3-12 is grouping the batch by pool; A3-15 and A3-10 are one lock (in-process and file) around
+accept-and-save plus a unique tmp name; A3-11 is the file name; A3-14 is a set of opened channels.
+
+**Fuji demo and cost report: fit to run at 6bcca8c** with these operating constraints: one worker, one
+process per provider key and state directory, `FOLIANT_POOL_ID` fixed across restarts (or the same
+salt), the same `FOLIANT_PRICE` across restarts, and the demo's scripted agents sending requests
+sequentially (A3-15 needs concurrent paid requests; A3-13 needs an RPC failure exactly during settle —
+if `POST /settle` raises, call it again before trusting the numbers). None of the six changes the
+transaction counts or gas in the cost report. Fix A3-13 and A3-15 first if the demo drives concurrent
+clients.
+
+**Before mainnet:** A3-10, A3-13, A3-15 (locking and no-drop on error), A3-12, A3-11, A3-14, the
+stale-update recovery in the client, and the items carried from round 1 (I-4 event/timer settlement is
+still absent: the provider's revenue on a closing channel or exiting claim still depends on someone
+calling `/settle` inside the timeout; I-5). Re-run `tests/test_chain_audit.py` expecting 34 of 34 with
+the one skip, plus the AUDIT-2 contract carry-overs.
+
+### Resolution of round-2 findings (author)
+
+| Finding | Action |
+| --- | --- |
+| A3-10 Medium | Fixed. A cross-process `flock` on `<state>.lock` plus a process `threading.Lock` wrap each accept and each settle; the state file is reloaded inside the lock before the staleness check. |
+| A3-11 Low | Fixed. State file named by chain, provider and token only. |
+| A3-12 Low | Fixed. Pool entries are batched by the pool id in their key, not the offer's current pool. |
+| A3-13 Medium | Fixed. No broad `except` around chain reads in `settle`; a transient RPC error propagates and nothing is dropped. |
+| A3-14 Low | Fixed. The http client tracks the channels it opened and reuses them whether or not the first payment was confirmed. |
+| A3-15 Medium | Fixed. Locking as above; per-writer temporary file (`mkstemp`) with atomic replace; state is mutated only after a successful save, and a save failure returns a generic 402 ("provider state unavailable, retry") without echoing the error. |
+| Stale-update recovery | Implemented as proposed: on a "stale update" 402 immediately after a discard, the client confirms the discarded update (the only one the gate can hold) and pays once more. |
+
+`tests/test_chain_audit.py`: 34 pass, 1 skipped (moot reproduction). Constraints that remain documented for the demo: one provider process per key and state directory is still the recommended deployment (the locks make more than one safe, but not faster); `FOLIANT_POOL_ID` should be fixed across restarts.
