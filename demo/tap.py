@@ -66,7 +66,11 @@ BALANCE_RETRY = 5     # seconds status() waits before asking again after a faile
 # a transport or JSON-RPC failure, as opposed to a bug of ours: only these become "chain unavailable" (F-11)
 RPC_ERRORS = (Web3Exception, requests.RequestException, ConnectionError, TimeoutError)
 # a JSON-RPC error from the F-8 probe that is the recipient's fault rather than the node's (D4)
-PROBE_REFUSALS = ("precompile", "execution reverted", "out of gas", "invalid opcode", "revert")
+# what a node says when it *executed* the call and the call failed, as against what it says when it
+# cannot answer: "revert" alone matched "reverting to the last snapshot", and "out of gas" matched
+# "the block ran out of gas room", both of which blamed the visitor for the node's trouble (D4)
+PROBE_REFUSALS = ("precompile", "execution reverted", "evm error revert", "invalid opcode",
+                  "out of gas:", "intrinsic gas", "always failing transaction")
 # addresses no externally-owned account is ever at: the EVM precompiles, and the two ranges Avalanche
 # reserves for its stateful precompiles (0x0100..00XX and 0x0200..00XX), which answer a call cleanly
 RESERVED_RANGES = ((0, 2 ** 16), (1 << 152, (1 << 152) + 256), (2 << 152, (2 << 152) + 256))
@@ -169,16 +173,23 @@ class Tap:
     def give(self, address: str, client: str) -> dict:
         """Fund `address`. `client` is an opaque string naming who asked (the server passes the caller's
         IP); it is never stored, only its sha256, and it bounds one visitor's attempts per day (F-1)."""
-        to = self._recipient(address)
-        if not isinstance(client, str) or not client:
-            raise TapError(400, "client must be a non-empty string")
+        try:
+            to = self._recipient(address)
+            if not isinstance(client, str) or not client:
+                raise TapError(400, "client must be a non-empty string")
+            client_key = hashlib.sha256(client.encode()).hexdigest()
+        except TapError:
+            raise
+        except Exception:  # nothing here should raise anything else; if it does it is ours, not the visitor's
+            traceback.print_exc(file=sys.stderr)
+            raise TapError(503, "the tap is temporarily unavailable") from None
         # one give at a time, and a caller never waits for another's chain round-trips: a request that
         # finds the tap busy is told so at once, rather than parking a server thread (TAP-REVIEW R2-3)
         if not self._lock.acquire(blocking=False):
             raise TapError(503, "the tap is serving someone else; retry in a few seconds")
         try:
             with self._file_lock(blocking=False):
-                return self._give_locked(to, hashlib.sha256(client.encode()).hexdigest())
+                return self._give_locked(to, client_key)
         except TapError:
             raise
         except RPC_ERRORS as e:  # an RPC failure in the pre-checks: nothing was charged. Only transport
@@ -434,6 +445,12 @@ class Tap:
                                           and _is_int(stuck["nonce"]) and isinstance(stuck["hash"], str)
                                           and _is_number(stuck["since"])):
                 raise TypeError("'stuck' must be {nonce: int, hash: str, since: finite number}")
+            # finite numbers only, here as for stuck.since above: an Infinity timestamp never expires,
+            # so it would hold an hourly slot or lock a client out for good (D7)
+            if not all(_is_number(t) for t in recent):
+                raise TypeError("'recent' must be a list of finite numbers")
+            if not all(isinstance(ts, list) and all(_is_number(t) for t in ts) for ts in clients.values()):
+                raise TypeError("'clients' values must be lists of finite numbers")
             recent = [float(t) for t in recent]
             clients = {c: [float(t) for t in ts] for c, ts in clients.items()}
         except (ValueError, TypeError, AttributeError, OSError) as e:
@@ -451,6 +468,11 @@ class Tap:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, self._path)
+            dfd = os.open(self._path.parent, os.O_RDONLY)  # the rename itself, not only the content (D9)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
         except BaseException:  # no temp-file litter behind a failed write (F-6)
             try:
                 os.unlink(tmp)

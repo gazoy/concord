@@ -843,3 +843,51 @@ def test_chunked_oversized_body_is_not_buffered(chain, tmp_path):
     start = next(m for m in sent if m["type"] == "http.response.start")
     assert start["status"] == 413
     assert len(pulled) < 16, len(pulled)  # stopped just past 1 KiB, not after 512
+
+
+def test_probe_message_matching_blames_the_right_party(chain, tmp_path, monkeypatch):
+    """D4 residue: a node saying it is reverting to a snapshot, or that the block ran out of gas room,
+    is the node's trouble (502), not the visitor's address (400)."""
+    from web3.exceptions import Web3RPCError
+    from demo.tap import TapError
+    L, _, _ = chain
+    tap = _tap(chain, tmp_path)
+
+    def probe_raises(msg):
+        def call(*a, **k):
+            raise Web3RPCError({"code": -32603, "message": msg})
+        return call
+
+    node_faults = ["node is reverting to the last snapshot", "the block ran out of gas room",
+                   "missing trie node; node restarting"]
+    for msg in node_faults:
+        monkeypatch.setattr(L.w3.eth, "call", probe_raises(msg))
+        with pytest.raises(TapError) as e:
+            tap.give(Account.create().address, "c")
+        assert e.value.status == 502, msg
+        monkeypatch.undo()
+    for msg in ["EVM error PrecompileOOG", "execution reverted", "EVM error Revert", "invalid opcode: INVALID"]:
+        monkeypatch.setattr(L.w3.eth, "call", probe_raises(msg))
+        with pytest.raises(TapError) as e:
+            tap.give(Account.create().address, "c")
+        assert e.value.status == 400, msg
+        monkeypatch.undo()
+    assert tap.status()["given"] == 0  # nothing charged either way
+
+
+def test_infinite_timestamps_are_a_corrupt_file(chain, tmp_path):
+    """D7: an Infinity in recent or a client's list never expires, so it would hold a slot for ever."""
+    from demo.tap import Tap, TapError
+    L, addrs, _ = chain
+    tap = _tap(chain, tmp_path)
+    tap.give(Account.create().address, "c")  # create the file
+    path = _state_file(chain, tmp_path)
+    good = json.loads(path.read_text())
+    for bad in ({**good, "recent": [float("inf")]},
+                {**good, "clients": {"h" * 64: [float("inf")]}},
+                {**good, "recent": ["1"]},
+                {**good, "clients": {"h" * 64: {"1": 2}}}):
+        path.write_text(json.dumps(bad))
+        with pytest.raises(TapError) as e:
+            Tap(L, TAP_KEY, addrs["token"], avax_wei=1, tokens=1, per_hour=1, state_dir=str(tmp_path))
+        assert e.value.status == 503 and "unreadable" in str(e.value)
