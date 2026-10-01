@@ -52,9 +52,15 @@ The project was called Concord until 28 September 2026; the name was changed to 
 
 ![Foliant demo](demo/video/foliant-demo.gif)
 
-[Two-minute narrated walkthrough (MP4)](demo/video/foliant-demo-voiced.mp4) of the first four scenarios, by the author (scenario E, the crew, was added afterwards and is not in the recording).
+[Narrated walkthrough of the live Fuji run (MP4)](demo/video/foliant-fuji-voiced.mp4) — 85 seconds,
+narrated by the author: a worker gets a budget inside an orchestrator's, pays for 25 calls off chain,
+and the contract refuses the one commitment the budget does not allow. The GIF above is the same run.
 
-`python demo/make_video.py` regenerates the captioned video, GIF and voiceover script in `demo/video/`; pass the voiceover's section boundaries in seconds to re-time the captions.
+There is also an [earlier walkthrough](demo/video/foliant-demo-voiced.mp4) of the in-memory demo's
+first four scenarios, recorded before the contracts were deployed.
+
+`python demo/make_fuji_video.py` regenerates the Fuji video's frames; `python demo/make_video.py`
+regenerates the older captioned video and GIF in `demo/video/`.
 
 ## Run
 

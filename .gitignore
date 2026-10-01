@@ -6,3 +6,4 @@ __pycache__/
 .venv/
 venv/
 sim/sweep.log
+demo/video/frames/
