@@ -1,8 +1,12 @@
+# Upper bounds are major-version ceilings, not pins: everything here is tested against the versions
+# in the comments, and web3 and eth-account are the two the chain code and the audits reason about
+# in detail (exception types, raw_transaction, the provider's retry allowlist, receipt polling), so
+# a major bump needs the suites re-run and demo/TAP-AUDIT-*.md re-checked before the ceiling moves.
 cryptography>=42
 fastapi>=0.110
 httpx>=0.27
 hypothesis>=6
 pytest>=8
 uvicorn>=0.30
-web3>=7
-eth-account>=0.13
+web3>=7,<8           # tested against 7.16
+eth-account>=0.13,<1 # tested against 0.14
