@@ -8,8 +8,9 @@
   "x402-exact": "check_exact(payment, requirements, chain, spentInWindow, now, escalated, expectedPayer?) -> expect ok (with the extracted spend) or a §7.2 / §3 reason code; chain is the paying account's policy first, then each ancestor; spentInWindow has one figure per policy",
   "policy": "a policy document -> expect ok or policy_invalid (§2); a binary encoding that cannot represent a value rejects at decode time, which counts as policy_invalid",
   "id": "a policy document -> its §2.2 id (hex SHA-256 of the canonical wire encoding); implementations that hash a binary struct instead skip this kind and say so",
-  "asset-check": "check(policy, amount, payee, now, spentInWindow, escalated, asset, assetSpentInWindow) -> expect ('ok' or a §3 reason code). As `check`, for policies carrying §2.3 `assets`; `assetDecimals` is what the evaluator determines the asset's decimals to be, and is absent when it cannot determine them.",
-  "asset-within": "within(child, parent) -> expect ('ok' or a §4.1 reason code), for policies carrying §2.3 `assets`."
+  "meter-check": "check(policy, amount, payee, now, spentInWindow, escalated, meter, meterSpentInWindow) -> expect ('ok' or a §3 reason code). As `check`, for policies carrying §2.3 `meters`; `meterDecimals` is what the evaluator determines an asset meter's decimals to be, and is absent when it cannot determine them or when the meter is a unit (nothing external to check against).",
+  "meter-within": "within(child, parent) -> expect ('ok' or a §4.1 code), for policies carrying §2.3 `meters`.",
+  "meter-policy": "a policy document carrying §2.3 `meters` -> expect ok or policy_invalid. Separate from `policy` because §2.3.1's registry rule is semantic, not schema-level: an unregistered unit name is schema-valid and MUST still be rejected at load, so an implementation without §2.3 cannot run these."
  },
  "vectors": [
   {
@@ -4199,8 +4200,8 @@
    "note": "signature, nonce and validity are not the policy's concern"
   },
   {
-   "id": "asset-check-001",
-   "kind": "asset-check",
+   "id": "meter-check-001",
+   "kind": "meter-check",
    "policy": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4209,7 +4210,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4222,15 +4223,15 @@
    "now": 1000,
    "spentInWindow": "0",
    "escalated": false,
-   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
-   "assetSpentInWindow": "0",
-   "assetDecimals": 6,
    "expect": "ok",
-   "note": "at the asset's perTxMax exactly"
+   "note": "at the asset's perTxMax exactly",
+   "meter": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "meterSpentInWindow": "0",
+   "meterDecimals": 6
   },
   {
-   "id": "asset-check-002",
-   "kind": "asset-check",
+   "id": "meter-check-002",
+   "kind": "meter-check",
    "policy": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4239,7 +4240,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4252,15 +4253,15 @@
    "now": 1000,
    "spentInWindow": "0",
    "escalated": false,
-   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
-   "assetSpentInWindow": "0",
-   "assetDecimals": 6,
-   "expect": "asset_per_tx_exceeded",
-   "note": "over the asset cap, under the nominal one"
+   "expect": "meter_per_tx_exceeded",
+   "note": "over the asset cap, under the nominal one",
+   "meter": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "meterSpentInWindow": "0",
+   "meterDecimals": 6
   },
   {
-   "id": "asset-check-003",
-   "kind": "asset-check",
+   "id": "meter-check-003",
+   "kind": "meter-check",
    "policy": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4269,7 +4270,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4282,15 +4283,15 @@
    "now": 1000,
    "spentInWindow": "0",
    "escalated": false,
-   "asset": "eip155:43113/erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-   "assetSpentInWindow": "0",
-   "assetDecimals": 6,
-   "expect": "asset_not_allowed",
-   "note": "an asset the policy does not name is denied by default"
+   "expect": "meter_not_allowed",
+   "note": "an asset the policy does not name is denied by default",
+   "meter": "eip155:43113/erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "meterSpentInWindow": "0",
+   "meterDecimals": 6
   },
   {
-   "id": "asset-check-004",
-   "kind": "asset-check",
+   "id": "meter-check-004",
+   "kind": "meter-check",
    "policy": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4299,22 +4300,22 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {}
+    "meters": {}
    },
    "amount": "1",
    "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
    "now": 1000,
    "spentInWindow": "0",
    "escalated": false,
-   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
-   "assetSpentInWindow": "0",
-   "assetDecimals": 6,
-   "expect": "asset_not_allowed",
-   "note": "an empty assets object permits no asset"
+   "expect": "meter_not_allowed",
+   "note": "an empty assets object permits no asset",
+   "meter": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "meterSpentInWindow": "0",
+   "meterDecimals": 6
   },
   {
-   "id": "asset-check-005",
-   "kind": "asset-check",
+   "id": "meter-check-005",
+   "kind": "meter-check",
    "policy": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4323,7 +4324,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4336,15 +4337,15 @@
    "now": 1000,
    "spentInWindow": "0",
    "escalated": false,
-   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
-   "assetSpentInWindow": "0",
-   "assetDecimals": 18,
-   "expect": "asset_decimals_mismatch",
-   "note": "pinned 6, asset reports 18"
+   "expect": "meter_decimals_mismatch",
+   "note": "pinned 6, asset reports 18",
+   "meter": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "meterSpentInWindow": "0",
+   "meterDecimals": 18
   },
   {
-   "id": "asset-check-006",
-   "kind": "asset-check",
+   "id": "meter-check-006",
+   "kind": "meter-check",
    "policy": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4353,7 +4354,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4366,14 +4367,14 @@
    "now": 1000,
    "spentInWindow": "0",
    "escalated": false,
-   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
-   "assetSpentInWindow": "0",
-   "expect": "asset_decimals_mismatch",
-   "note": "decimals undeterminable: refuse, do not assume"
+   "expect": "meter_decimals_mismatch",
+   "note": "decimals undeterminable: refuse, do not assume",
+   "meter": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "meterSpentInWindow": "0"
   },
   {
-   "id": "asset-check-007",
-   "kind": "asset-check",
+   "id": "meter-check-007",
+   "kind": "meter-check",
    "policy": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4382,7 +4383,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4395,15 +4396,15 @@
    "now": 1000,
    "spentInWindow": "0",
    "escalated": false,
-   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
-   "assetSpentInWindow": "1600",
-   "assetDecimals": 6,
-   "expect": "asset_per_window_exceeded",
-   "note": "asset window full"
+   "expect": "meter_per_window_exceeded",
+   "note": "asset window full",
+   "meter": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "meterSpentInWindow": "1600",
+   "meterDecimals": 6
   },
   {
-   "id": "asset-check-008",
-   "kind": "asset-check",
+   "id": "meter-check-008",
+   "kind": "meter-check",
    "policy": {
     "perTxMax": "1000",
     "perWindowMax": "1000",
@@ -4412,7 +4413,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4425,15 +4426,15 @@
    "now": 1000,
    "spentInWindow": "600",
    "escalated": false,
-   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
-   "assetSpentInWindow": "0",
-   "assetDecimals": 6,
    "expect": "per_window_exceeded",
-   "note": "asset window has room, the nominal aggregate ceiling does not"
+   "note": "asset window has room, the nominal aggregate ceiling does not",
+   "meter": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "meterSpentInWindow": "0",
+   "meterDecimals": 6
   },
   {
-   "id": "asset-check-009",
-   "kind": "asset-check",
+   "id": "meter-check-009",
+   "kind": "meter-check",
    "policy": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4442,7 +4443,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "2000",
@@ -4455,15 +4456,15 @@
    "now": 1000,
    "spentInWindow": "0",
    "escalated": false,
-   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
-   "assetSpentInWindow": "0",
-   "assetDecimals": 6,
    "expect": "per_tx_exceeded",
-   "note": "asset cap is wider than the nominal cap; the nominal one still binds"
+   "note": "asset cap is wider than the nominal cap; the nominal one still binds",
+   "meter": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "meterSpentInWindow": "0",
+   "meterDecimals": 6
   },
   {
-   "id": "asset-check-010",
-   "kind": "asset-check",
+   "id": "meter-check-010",
+   "kind": "meter-check",
    "policy": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4472,7 +4473,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4485,15 +4486,15 @@
    "now": 1000,
    "spentInWindow": "0",
    "escalated": true,
-   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
-   "assetSpentInWindow": "0",
-   "assetDecimals": 6,
    "expect": "ok",
-   "note": "escalation lifts the asset per-tx cap"
+   "note": "escalation lifts the asset per-tx cap",
+   "meter": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "meterSpentInWindow": "0",
+   "meterDecimals": 6
   },
   {
-   "id": "asset-check-011",
-   "kind": "asset-check",
+   "id": "meter-check-011",
+   "kind": "meter-check",
    "policy": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4502,7 +4503,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4515,15 +4516,15 @@
    "now": 1000,
    "spentInWindow": "0",
    "escalated": true,
-   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
-   "assetSpentInWindow": "1600",
-   "assetDecimals": 6,
-   "expect": "asset_per_window_exceeded",
-   "note": "escalation never lifts the asset window cap"
+   "expect": "meter_per_window_exceeded",
+   "note": "escalation never lifts the asset window cap",
+   "meter": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "meterSpentInWindow": "1600",
+   "meterDecimals": 6
   },
   {
-   "id": "asset-check-012",
-   "kind": "asset-check",
+   "id": "meter-check-012",
+   "kind": "meter-check",
    "policy": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4534,7 +4535,7 @@
     ],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4547,15 +4548,15 @@
    "now": 1000,
    "spentInWindow": "0",
    "escalated": false,
-   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
-   "assetSpentInWindow": "0",
-   "assetDecimals": 6,
    "expect": "payee_denied",
-   "note": "payee checks precede asset checks"
+   "note": "payee checks precede asset checks",
+   "meter": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "meterSpentInWindow": "0",
+   "meterDecimals": 6
   },
   {
-   "id": "asset-check-013",
-   "kind": "asset-check",
+   "id": "meter-check-013",
+   "kind": "meter-check",
    "policy": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4564,7 +4565,7 @@
     "denyList": [],
     "expiry": 500,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4577,15 +4578,15 @@
    "now": 1000,
    "spentInWindow": "0",
    "escalated": false,
-   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
-   "assetSpentInWindow": "0",
-   "assetDecimals": 6,
    "expect": "expired",
-   "note": "expiry precedes asset checks"
+   "note": "expiry precedes asset checks",
+   "meter": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "meterSpentInWindow": "0",
+   "meterDecimals": 6
   },
   {
-   "id": "asset-check-014",
-   "kind": "asset-check",
+   "id": "meter-check-014",
+   "kind": "meter-check",
    "policy": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4594,7 +4595,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/ERC20:0XADFAE994BF522D8AC3262AF2339568CA3A096CED": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4607,15 +4608,15 @@
    "now": 1000,
    "spentInWindow": "0",
    "escalated": false,
-   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
-   "assetSpentInWindow": "0",
-   "assetDecimals": 6,
    "expect": "ok",
-   "note": "asset ids compare canonically (§2.1 applies to the address part)"
+   "note": "asset ids compare canonically (§2.1 applies to the address part)",
+   "meter": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "meterSpentInWindow": "0",
+   "meterDecimals": 6
   },
   {
-   "id": "asset-within-001",
-   "kind": "asset-within",
+   "id": "meter-within-001",
+   "kind": "meter-within",
    "child": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4624,7 +4625,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4640,7 +4641,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4652,8 +4653,8 @@
    "note": "identical"
   },
   {
-   "id": "asset-within-002",
-   "kind": "asset-within",
+   "id": "meter-within-002",
+   "kind": "meter-within",
    "child": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4662,7 +4663,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "600",
@@ -4678,7 +4679,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4686,12 +4687,12 @@
      }
     }
    },
-   "expect": "child_asset_per_tx_wider",
+   "expect": "child_meter_per_tx_wider",
    "note": "child wider in one asset"
   },
   {
-   "id": "asset-within-003",
-   "kind": "asset-within",
+   "id": "meter-within-003",
+   "kind": "meter-within",
    "child": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4700,7 +4701,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4716,7 +4717,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4724,12 +4725,12 @@
      }
     }
    },
-   "expect": "child_asset_per_window_wider",
+   "expect": "child_meter_per_window_wider",
    "note": "child window cap wider"
   },
   {
-   "id": "asset-within-004",
-   "kind": "asset-within",
+   "id": "meter-within-004",
+   "kind": "meter-within",
    "child": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4738,7 +4739,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4759,7 +4760,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4767,12 +4768,12 @@
      }
     }
    },
-   "expect": "child_asset_wider",
+   "expect": "child_meter_wider",
    "note": "child names an asset the parent does not"
   },
   {
-   "id": "asset-within-005",
-   "kind": "asset-within",
+   "id": "meter-within-005",
+   "kind": "meter-within",
    "child": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4790,7 +4791,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4798,12 +4799,12 @@
      }
     }
    },
-   "expect": "child_asset_wider",
+   "expect": "child_meter_wider",
    "note": "a constrained parent requires a constrained child"
   },
   {
-   "id": "asset-within-006",
-   "kind": "asset-within",
+   "id": "meter-within-006",
+   "kind": "meter-within",
    "child": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4812,7 +4813,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4833,8 +4834,8 @@
    "note": "an unconstrained parent constrains no asset; its nominal caps still bind (4.2)"
   },
   {
-   "id": "asset-within-007",
-   "kind": "asset-within",
+   "id": "meter-within-007",
+   "kind": "meter-within",
    "child": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4843,7 +4844,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 18,
       "perTxMax": "500",
@@ -4859,7 +4860,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4867,12 +4868,12 @@
      }
     }
    },
-   "expect": "child_asset_decimals_mismatch",
+   "expect": "child_meter_decimals_mismatch",
    "note": "same asset, different pinned decimals"
   },
   {
-   "id": "asset-within-008",
-   "kind": "asset-within",
+   "id": "meter-within-008",
+   "kind": "meter-within",
    "child": {
     "perTxMax": "1000",
     "perWindowMax": "5000",
@@ -4881,7 +4882,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "400",
@@ -4897,7 +4898,7 @@
     "denyList": [],
     "expiry": null,
     "escalation": null,
-    "assets": {
+    "meters": {
      "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
       "decimals": 6,
       "perTxMax": "500",
@@ -4907,6 +4908,610 @@
    },
    "expect": "ok",
    "note": "child narrower"
+  },
+  {
+   "id": "meter-check-015",
+   "kind": "meter-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:compute-seconds": {
+      "decimals": 3,
+      "perTxMax": "60000",
+      "perWindowMax": "3600000"
+     }
+    }
+   },
+   "amount": "60000",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "meter": "unit:compute-seconds",
+   "meterSpentInWindow": "0",
+   "expect": "ok",
+   "note": "a unit meter at its per-tx cap; 60 compute-seconds at millisecond precision"
+  },
+  {
+   "id": "meter-check-016",
+   "kind": "meter-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:compute-seconds": {
+      "decimals": 3,
+      "perTxMax": "60000",
+      "perWindowMax": "3600000"
+     }
+    }
+   },
+   "amount": "60001",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "meter": "unit:compute-seconds",
+   "meterSpentInWindow": "0",
+   "expect": "meter_per_tx_exceeded",
+   "note": "one millisecond over the unit's per-tx cap"
+  },
+  {
+   "id": "meter-check-017",
+   "kind": "meter-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:compute-seconds": {
+      "decimals": 3,
+      "perTxMax": "60000",
+      "perWindowMax": "3600000"
+     }
+    }
+   },
+   "amount": "60000",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "meter": "unit:compute-seconds",
+   "meterSpentInWindow": "3570000",
+   "expect": "meter_per_window_exceeded",
+   "note": "the unit's window is full"
+  },
+  {
+   "id": "meter-check-018",
+   "kind": "meter-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:compute-seconds": {
+      "decimals": 3,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "meter": "unit:gpu-seconds",
+   "meterSpentInWindow": "0",
+   "expect": "meter_not_allowed",
+   "note": "unit:gpu-seconds is not registered by 2.3.1 and is not named: refused, never treated as unconstrained"
+  },
+  {
+   "id": "meter-check-019",
+   "kind": "meter-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:tokens": {
+      "decimals": 0,
+      "perTxMax": "4096",
+      "perWindowMax": "100000"
+     }
+    }
+   },
+   "amount": "4096",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "meter": "unit:tokens",
+   "meterSpentInWindow": "0",
+   "expect": "ok",
+   "note": "whole tokens, decimals 0"
+  },
+  {
+   "id": "meter-check-020",
+   "kind": "meter-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:x-sorties": {
+      "decimals": 0,
+      "perTxMax": "5",
+      "perWindowMax": "20"
+     }
+    }
+   },
+   "amount": "3",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "meter": "unit:x-sorties",
+   "meterSpentInWindow": "0",
+   "expect": "ok",
+   "note": "a private-use unit name is permitted when named"
+  },
+  {
+   "id": "meter-check-021",
+   "kind": "meter-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     },
+     "unit:calls": {
+      "decimals": 0,
+      "perTxMax": "10",
+      "perWindowMax": "100"
+     }
+    }
+   },
+   "amount": "8",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "meter": "unit:calls",
+   "meterSpentInWindow": "0",
+   "expect": "ok",
+   "note": "money and a unit in one policy: the unit path is taken"
+  },
+  {
+   "id": "meter-check-022",
+   "kind": "meter-check",
+   "policy": {
+    "perTxMax": "400",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     },
+     "unit:calls": {
+      "decimals": 0,
+      "perTxMax": "10",
+      "perWindowMax": "100"
+     }
+    }
+   },
+   "amount": "500",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "meter": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "meterSpentInWindow": "0",
+   "meterDecimals": 6,
+   "expect": "per_tx_exceeded",
+   "note": "the nominal cap still binds a money meter in a mixed policy"
+  },
+  {
+   "id": "meter-check-023",
+   "kind": "meter-check",
+   "policy": {
+    "perTxMax": "5",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:calls": {
+      "decimals": 0,
+      "perTxMax": "10",
+      "perWindowMax": "100"
+     }
+    }
+   },
+   "amount": "8",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "meter": "unit:calls",
+   "meterSpentInWindow": "0",
+   "expect": "ok",
+   "note": "a unit amount far over the nominal perTxMax is still ok: the nominal caps bind money, not units (2.3), or every compute budget would fail a money limit"
+  },
+  {
+   "id": "meter-check-024",
+   "kind": "meter-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "meters": {
+     "unit:calls": {
+      "decimals": 0,
+      "perTxMax": "10",
+      "perWindowMax": "100"
+     }
+    }
+   },
+   "amount": "12",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": true,
+   "meter": "unit:calls",
+   "meterSpentInWindow": "0",
+   "expect": "ok",
+   "note": "escalation lifts a unit's per-tx cap"
+  },
+  {
+   "id": "meter-check-025",
+   "kind": "meter-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "meters": {
+     "unit:calls": {
+      "decimals": 0,
+      "perTxMax": "10",
+      "perWindowMax": "100"
+     }
+    }
+   },
+   "amount": "8",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": true,
+   "meter": "unit:calls",
+   "meterSpentInWindow": "95",
+   "expect": "meter_per_window_exceeded",
+   "note": "escalation never lifts a unit's window cap"
+  },
+  {
+   "id": "meter-check-026",
+   "kind": "meter-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:compute-seconds": {
+      "decimals": 3,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "meter": "unit:compute-seconds",
+   "meterSpentInWindow": "0",
+   "expect": "ok",
+   "note": "a unit meter needs no external decimals check: meterDecimals absent is not a mismatch"
+  },
+  {
+   "id": "meter-within-009",
+   "kind": "meter-within",
+   "child": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:compute-seconds": {
+      "decimals": 3,
+      "perTxMax": "30000",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "parent": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:compute-seconds": {
+      "decimals": 3,
+      "perTxMax": "60000",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "expect": "ok",
+   "note": "child narrower in a unit"
+  },
+  {
+   "id": "meter-within-010",
+   "kind": "meter-within",
+   "child": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:compute-seconds": {
+      "decimals": 3,
+      "perTxMax": "90000",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "parent": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:compute-seconds": {
+      "decimals": 3,
+      "perTxMax": "60000",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "expect": "child_meter_per_tx_wider",
+   "note": "child wider in a unit"
+  },
+  {
+   "id": "meter-within-011",
+   "kind": "meter-within",
+   "child": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     },
+     "unit:compute-seconds": {
+      "decimals": 3,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "parent": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "expect": "child_meter_wider",
+   "note": "child adds a unit meter its parent does not name"
+  },
+  {
+   "id": "meter-within-012",
+   "kind": "meter-within",
+   "child": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:compute-seconds": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "parent": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:compute-seconds": {
+      "decimals": 3,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "expect": "child_meter_decimals_mismatch",
+   "note": "same unit, different pinned precision"
+  },
+  {
+   "id": "meter-policy-010",
+   "kind": "meter-policy",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:gpu-seconds": {
+      "decimals": 0,
+      "perTxMax": "10",
+      "perWindowMax": "100"
+     }
+    }
+   },
+   "expect": "policy_invalid",
+   "note": "unit:gpu-seconds is not registered by 2.3.1 and is not private-use: rejected at load, not at use"
+  },
+  {
+   "id": "meter-policy-011",
+   "kind": "meter-policy",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:x-sorties": {
+      "decimals": 0,
+      "perTxMax": "10",
+      "perWindowMax": "100"
+     }
+    }
+   },
+   "expect": "ok",
+   "note": "a private-use unit name is valid"
+  },
+  {
+   "id": "meter-policy-012",
+   "kind": "meter-policy",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "unit:calls": {
+      "decimals": 0,
+      "perTxMax": "10",
+      "perWindowMax": "100"
+     }
+    }
+   },
+   "expect": "ok",
+   "note": "a registered unit name is valid"
+  },
+  {
+   "id": "meter-policy-013",
+   "kind": "meter-policy",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "meters": {
+     "Unit:Calls": {
+      "decimals": 0,
+      "perTxMax": "10",
+      "perWindowMax": "100"
+     }
+    }
+   },
+   "expect": "policy_invalid",
+   "note": "unit ids are lowercase; 2.3.1's grammar does not admit this"
   }
  ]
 }
