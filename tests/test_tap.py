@@ -891,3 +891,16 @@ def test_infinite_timestamps_are_a_corrupt_file(chain, tmp_path):
         with pytest.raises(TapError) as e:
             Tap(L, TAP_KEY, addrs["token"], avax_wei=1, tokens=1, per_hour=1, state_dir=str(tmp_path))
         assert e.value.status == 503 and "unreadable" in str(e.value)
+
+
+def test_server_restarts_without_recreating_its_pool(chain, tmp_path):
+    """The pool id is determined by (coordinator, salt), so a second start would try to create the
+    same pool and die on PoolExists — which made the deployed server unrestartable until it reused
+    an existing pool instead."""
+    from fastapi.testclient import TestClient
+    salt = str(_salt[0] + 1000)
+    first = TestClient(_app(chain, tmp_path, FOLIANT_POOL_SALT=salt))
+    pid = first.get("/chain").json()["poolId"]
+    # a second server with the same provider key and salt, which is what a restart is
+    second = TestClient(_app(chain, tmp_path, FOLIANT_POOL_SALT=salt))
+    assert second.get("/chain").json()["poolId"] == pid

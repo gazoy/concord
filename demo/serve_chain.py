@@ -34,6 +34,8 @@ from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from web3.exceptions import ContractCustomError, ContractLogicError
+
 from foliant.chain import ChainGate, ChainLedger, ChainOffer, ChainPayment, PaymentRequired, _hex
 from demo.tap import TapError, tap_from_env
 
@@ -53,9 +55,23 @@ def make_app() -> FastAPI:
         if L.pool(offer.pool_id)["coordinator"].lower() != provider.lower():
             raise SystemExit("FOLIANT_POOL_ID is not a pool coordinated by PROVIDER_KEY")
     else:
-        offer.pool_id = gate.create_pool(timeout_secs=int(env.get("FOLIANT_POOL_TIMEOUT", "3600")),
-                                         salt=int(env.get("FOLIANT_POOL_SALT", "0")))
-        print("pool created", _hex(offer.pool_id))
+        # the pool id is determined by (coordinator, salt), so a restart would try to create the same
+        # pool again and die on PoolExists. Reuse it when it is already there and ours.
+        salt = int(env.get("FOLIANT_POOL_SALT", "0"))
+        pid = L.pools.functions.poolId(provider, salt).call()
+        try:  # the view reverts with NoPool rather than returning an empty struct
+            existing = L.pools.functions.get(pid).call()
+        except (ContractCustomError, ContractLogicError):
+            existing = None
+        if existing is not None:
+            if existing[0].lower() != provider.lower():
+                raise SystemExit(f"pool {_hex(pid)} exists but is not coordinated by PROVIDER_KEY; "
+                                 f"set FOLIANT_POOL_SALT to an unused value")
+            offer.pool_id = pid
+            print("pool reused", _hex(pid))
+        else:
+            offer.pool_id = gate.create_pool(timeout_secs=int(env.get("FOLIANT_POOL_TIMEOUT", "3600")), salt=salt)
+            print("pool created", _hex(offer.pool_id))
 
     from contextlib import asynccontextmanager
 
