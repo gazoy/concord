@@ -20,33 +20,64 @@ python try_fuji.py
 
 ## What it prints
 
+This is a real run, with the hashes shortened. Yours will differ only in the addresses.
+
 ```
+Foliant — https://fuji.foliant.network
+
 1. Ask the server what it offers
    network   avalanche-fuji (chain id 43113)
+   node      https://api.avax-test.network/ext/bc/C/rpc
+   accounts  https://testnet.snowtrace.io/address/0xDB6940FBD9Dcf8AAD1aBB521B4b6790D0b579c92
    price     0.10 per call
 
 2. Get a key and ask the tap to fund it
-   funded: https://testnet.snowtrace.io/tx/0x…
+   made a new key, saved to /home/you/.foliant-try.json (testnet, worth nothing, delete it freely)
+   address   0xB652C2917471f500B44FC9c8d7641B5c99Cc6333
+   funded: https://testnet.snowtrace.io/tx/0x0625c853…
+   funded: https://testnet.snowtrace.io/tx/0x6530bc00…
    holding   0.02 AVAX for gas, 1,000.00 tokens to spend
 
 3. Register the orchestrator's account and fund it on chain
    policy    500.00 per payment, 2,000.00 per hour
-   registered: https://testnet.snowtrace.io/tx/0x…
+   registered: https://testnet.snowtrace.io/tx/0x431d7597…
+   approved: https://testnet.snowtrace.io/tx/0x0e1e2ff8…
+   deposited: https://testnet.snowtrace.io/tx/0xa1302459…
+   account   0x4f09cd997dd581d8… holding 500.00 tokens
 
 4. Give a worker its own budget inside the orchestrator's
-   policy    20.00 per payment, 60.00 per hour
-   delegated: https://testnet.snowtrace.io/tx/0x…
+   policy    20.00 per payment, 60.00 per hour — inside the orchestrator's, and checked against it
+   delegated: https://testnet.snowtrace.io/tx/0x005310dc…
+   worker    funded with 60.00 tokens
 
 5. Commit the worker's budget to the provider's pool — one transaction
-   joined: https://testnet.snowtrace.io/tx/0x…
+   joined: https://testnet.snowtrace.io/tx/0x34adafc1…
+   committed 20.00 — this is the payment the policy checks
 
 6. Make 25 paid API calls — none of these touch the chain
+   call 1   paid 0.10, answered 'call 1'
+   call 2   paid 0.10, answered 'call 2'
+   call 3   paid 0.10, answered 'call 3'
+   …
+   call 25  paid 0.10, answered 'call 25'
    25 signed receipts, 2.50 paid, and 0 transactions sent
 
 7. Try to commit more than the worker's budget allows
    refused by the contract: PolicyViolation: amount exceeds per_tx_max
+   the policy is a precondition of the contract call, so the attempt fails when the
+   transaction is priced and never reaches the chain: nothing sent, no gas spent
 
 8. Settlement — one transaction for the whole session
+   settling is the provider's business, not the payer's, and this server does it on a
+   timer. Your 25 calls will go on chain in one transaction at its next tick.
+   watch the pool: https://testnet.snowtrace.io/address/0x26665c7Ad0a4272F87D1949745dD4B4743F53662
+
+What the chain now says
+   worker committed   20.00 of its 60.00 this hour
+   orchestrator shows 20.00 — the total its workers have committed this hour,
+                      because every payment is recorded against every account above it
+
+25 paid calls cost 1 transaction to set up and one to settle.
 ```
 
 Every hash is a link, so none of it has to be taken on trust.
@@ -68,8 +99,10 @@ draw on it afterwards cannot exceed the deposit, so they need no further check.
 
 **Step 6 touches no chain at all.** Twenty-five HTTP 402 exchanges in the x402 wire format: the
 worker signs an increased balance, the server verifies it against the deposit and serves the
-request. The script asserts that zero transactions were sent during this step, so the claim is
-checked rather than asserted. Two thousand calls would cost the same on-chain as twenty-five.
+request. The script checks at runtime that zero transactions were sent during this step and stops if any
+were, so the claim is verified on your run rather than taken on trust. Two hundred calls — the whole
+20-token commitment at 0.10 each — would cost exactly as much on chain as these twenty-five: nothing.
+The deposit, not the number of calls, is the bound.
 
 **Step 7 is the enforcement, and it is the step worth reading the code for.** The policy is a
 precondition inside `AgentAccounts.commit`, which `PaymentChannels.open` must call. The attempt
@@ -78,9 +111,10 @@ therefore fails when the transaction is priced, before anything is broadcast —
 can route around by calling a different method.
 
 **Step 8 is the economics.** One settlement for the session rather than one transaction per call.
-The [cost report](fuji-cost-report.md) measures the on-chain side at roughly 335k gas for a pooled
-session against about 75k per call paid individually, so twenty-five calls is comfortably past the
-break-even of five to seven. Settlement is the provider's business, not the payer's, so the demo
+The [cost report](fuji-cost-report.md) measures a pooled session at roughly 335k gas on Fuji and
+estimates a per-call alternative at about 75k, putting the break-even at five to seven calls — so
+twenty-five is comfortably past it. (The report is careful to say which of those two figures it
+measured and which it estimated.) Settlement is the provider's business, not the payer's, so the demo
 server does it on a timer: your calls go on chain within ten minutes of the run.
 
 ## Then what

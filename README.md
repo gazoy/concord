@@ -5,8 +5,8 @@
 An orchestrator gives each worker a budget. Every payment is checked against that worker's policy
 and every account above it before any value moves, so a worker cannot exceed its budget and a crew
 cannot exceed the orchestrator's — enforced by the contract, not by the agent's own code. The calls
-themselves are paid for off chain in the x402 wire format, so a session of any length settles in one
-transaction.
+themselves are paid for off chain in the x402 wire format, so a session settles in one transaction
+however many calls it took — as many as the committed deposit covers.
 
 Live on Avalanche Fuji, independently audited, with a draft specification and conformance vectors.
 

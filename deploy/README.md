@@ -43,7 +43,8 @@ sudo chown root:foliant /etc/foliant/demo.env
 sudo chmod 640 /etc/foliant/demo.env
 ```
 
-`openssl rand -hex 32` gives a settle key. Fund the tap wallet from the Core faucet
+`openssl rand -hex 32` gives a settle key. Leave `FOLIANT_PRICE` at 100000 (0.10 of a token) if you
+want [`docs/try-it.md`](../docs/try-it.md) to describe your server accurately. Fund the tap wallet from the Core faucet
 (<https://core.app/tools/testnet-faucet/>); 1 AVAX covers about forty visitors.
 
 ## 4. The service and the settle timer

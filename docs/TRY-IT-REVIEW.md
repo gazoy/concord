@@ -493,3 +493,261 @@ each would change the run/don't-run decision:
 - **The tap.** `demo/tap.py` is unusually careful — per-address, per-client, per-hour and per-day
   limits all charged before anything is broadcast, the precompile and contract-recipient probes,
   the stuck-transaction record. It is not reader-facing, but it is why "no faucet" is true at all.
+
+---
+
+# Round 2
+
+Re-read at commit `9a3c0a1` in the same order as before, as the same stranger. Then run four
+times: the single run (`stranger_run.sh`), two consecutive runs against one state file
+(`stranger_twice.sh`), a deliberately sabotaged run to test whether step 6's assertion can fire,
+and a 250-call run. Plus two stub servers to exercise the new chain-id gate. Nothing committed.
+
+## Would I send it to a colleague now?
+
+**Yes.** That is the whole of the change. Round 1's objection was not that the protocol was weak —
+it was that I had watched the page contradict itself twice inside ninety seconds, and I will not
+forward something that does that. Both contradictions are gone, and gone properly rather than
+papered over: the pool join was promoted to a step of its own rather than deleted from the prose,
+and the "no transactions" claim is now *checked at runtime* instead of asserted in prose. I tried
+to make that check pass vacuously and could not (see below). The README now opens with a sentence
+that says what the thing does.
+
+What remains is one wrong number, one new self-contradiction and a handful of polish. None of them
+would stop me sending the link; R2-1 is the only one I would want fixed before it goes anywhere
+public, because it is the same species of error as round 1's finding 1 — a claim the reader can
+falsify with an environment variable the script itself provides.
+
+## Per-finding verdict
+
+| # | Round 1 finding | Verdict |
+|---|---|---|
+| 1 | "no calls touched the chain" false | **Fixed, and the best fix in the set.** See below. |
+| 2 | Not every transaction printed | **Fixed and verified against published 0.1.1.** Minor label bug, R2-5. |
+| 3 | Settlement promise never demonstrated | **Fixed.** Honest now. |
+| 4 | Second run fails | **Fixed and verified.** Minor, R2-8. |
+| 5 | PEP 668 / Python version / `curl -O` | **Fixed**, all three. |
+| 6 | "cannot cost you anything" unguarded | **Fixed and verified**, both chains. New side effect, R2-2. |
+| 7 | Below break-even; "measured" overstated | **Half fixed.** 25 calls clears break-even; the "measured" overstatement survives. |
+| 8 | Crew/tightening claim not demonstrated | **Fixed, neatly.** |
+| 9 | "units" at two scales | **Fixed**, with a new coupling, R2-3. |
+| 10 | Raw tracebacks | **Fixed and verified.** |
+| 11 | Troubleshooting gaps | **Fixed.** |
+| 12 | README buries and undercuts | **Fixed.** |
+| 13 | "both references" overstated | **Fixed.** |
+| 14 | "no gas" is an SDK property | **Fixed.** |
+| 15 | Script readability | **Mostly fixed.** One leftover, R2-6. |
+| 16 | Key file unannounced | **Fixed.** Trivial leftover below. |
+| 17 | Sample output ≠ real output | **Partially fixed**, R2-7. |
+
+### The three things you asked me to check
+
+**Can the step-6 assertion pass vacuously? No — I tried.** I copied the script, changed one
+argument (`prefer_pool=False`) so that step 6's first call is forced to open a channel rather than
+reuse the pool claim, and ran it. The assertion fires:
+
+```
+6. Make 25 paid API calls — none of these touch the chain
+   call 1   paid 0.10, answered 'call 1'
+   ...
+AssertionError: a call sent a transaction; that would be a bug
+```
+
+The design reason it cannot go vacuous is worth stating because it was not obvious to me until I
+looked: `record()` installs the counter on the *worker* instance, and step 5 prints
+`joined: 0x782f…` from that same counter one step earlier. So every run contains a positive control
+— if the wrap had silently failed, step 5 would print nothing and the reader would see it. The
+claim is load-bearing on a mechanism the reader watches work. That is a genuinely good piece of
+design and I would not have thought to ask for it.
+
+**Does `record()` work against the published package? Yes, verified.** The venv resolves
+`foliant` to `…/site-packages/foliant/` at version 0.1.1, and `ChainAgent.__init__` there does
+**not** set `self.sent`, so the fallback path is the one that runs. The run prints real hashes with
+no `0x0x` doubling — `HexBytes.hex()` returns bare hex in this version, so `"0x" + …` is right.
+(Worth knowing: when I first checked this from inside `/home/claude/concord`, `import foliant`
+picked up the repo copy, which *does* have `self.sent`, and the check silently tested the wrong
+thing. Anyone re-verifying this should `cd` elsewhere first.)
+
+**Does the step 5/6 split mislead in the other direction? No.** I looked for this specifically.
+Step 5's heading says "one transaction", the body says "joining the pool commits 20 tokens, and
+that single transaction is what the policy tree authorises", and the closing line says "25 paid
+calls cost 1 transaction to set up and one to settle". A reader cannot come away thinking the chain
+is touched per call. If anything the split *improves* the pitch, because committed-value-is-the-spend
+is the actual mechanism and it now has a step to itself instead of being a detail inside a
+contradiction.
+
+**Is the README's first sentence defensible?** Yes. "An on-chain spending budget for AI agent
+crews, and one settlement per session" — the budget is on-chain and enforced as a contract
+precondition (`AgentAccounts.sol:488`, reached through `PaymentChannels.open` → `accounts.commit`),
+and one settlement per session is the pool route in the cost report. The overstatement in that
+section is one paragraph lower: see R2-4.
+
+---
+
+## New findings
+
+### R2-1. Medium — "Two thousand calls would cost the same on-chain as twenty-five" is false at this configuration
+
+**Location:** `docs/try-it.md:72`.
+
+**Evidence.** The worker commits `budget` = 20 tokens and the price is 0.10, so the deposit covers
+**exactly 200 calls**. The script exposes `FOLIANT_TRY_CALLS`, so the reader can test the sentence
+directly. At 250:
+
+```
+6. Make 250 paid API calls — none of these touch the chain
+   call 1   paid 0.10, answered 'call 1'
+   …
+PolicyViolation: pool deposit exhausted
+```
+
+Two thousand calls would need a 200-token commitment, which the worker's 20-token `per_tx_max`
+forbids outright — so at this configuration it is not merely more expensive, it is impossible
+without a different policy. The round-1 version of this sentence ("Thousands of calls cost the same
+on-chain as three") was *true*, because the deposit was 100 tokens at 3 raw units. Rescaling the
+numbers for finding 9 broke it, and nothing re-checked it.
+
+This is the one finding I would fix before publishing, because it is round 1's finding 1 again in
+miniature: a claim the reader can falsify in thirty seconds using a knob the script hands them.
+
+**Fix.** Either say the true number — "Two hundred calls, the whole committed deposit, would cost
+the same on-chain as twenty-five" — or raise `budget` so the sentence becomes true. The former is
+better: it introduces the deposit as the real bound, which is the mechanism you want understood.
+Worth adding `pool deposit exhausted` to the troubleshooting table too, since `FOLIANT_TRY_CALLS`
+invites exactly this.
+
+### R2-2. Medium — the chain-id gate contradicts "runs against any Foliant server"
+
+**Location:** `examples/try_fuji.py:31,110-112` against `docs/try-it.md:97-100`.
+
+**Evidence.** The gate works, and its message is good. Mainnet:
+
+```
+this script only runs against a testnet; the server is on chain 43114.
+It funds itself from a tap and takes no care with anything of value.
+```
+
+But membership is `EXPLORERS = {43113, 31337}`, so a private chain on any other id is refused:
+
+```
+this script only runs against a testnet; the server is on chain 1337.
+```
+
+1337 is the default for Geth `--dev` and several Besu/devnet setups. "Against your own server" says
+the script "runs against any Foliant server", two sections above a gate that refuses most private
+chains. Someone following that section with their own stack hits a message telling them their own
+devnet is unsafe.
+
+**Fix.** Keep the allowlist (it is what makes line 7 true) but add an escape hatch and say so:
+`FOLIANT_ALLOW_CHAIN=1337`, mentioned in one clause under "Against your own server". Note the
+explorer map and the safety allowlist are now the same dict doing two jobs — a private chain needs
+an entry with an empty explorer string purely to be permitted, which is why 31337 is in there as
+`""`. Splitting them would make both clearer.
+
+### R2-3. Medium — the page is only correct if the operator sets `FOLIANT_PRICE=100000`, and nothing checks
+
+**Location:** `docs/try-it.md:26,44,72,82`; `demo/serve_chain.py:49` (`FOLIANT_PRICE`, default 3).
+
+Every number on the page — `0.10 per call`, `2.50 paid`, the 200-call deposit ceiling, "twenty-five
+calls is comfortably past the break-even" — depends on the server being configured at 100,000
+units. The server's default is 3. At the default the page reads `0.00 per call` and `0.00 paid`
+(two-decimal formatting of 0.000003), which looks broken rather than cheap.
+
+The coordinator has told the operator; the problem is that nothing in the repository records the
+dependency, so the next person to redeploy restores the default and silently falsifies the page.
+
+**Fix.** Put `FOLIANT_PRICE=100000` in `deploy/README.md` with a one-line comment saying the
+walkthrough's figures assume it, and have the script widen its formatting when `price < UNIT // 100`
+so a differently-priced server degrades to something honest instead of `0.00`.
+
+### R2-4. Low — "a session of any length settles in one transaction" is bounded by the deposit
+
+**Location:** `README.md:8-9`.
+
+The session is bounded by committed value: past the deposit, `pay_pool` raises
+`PolicyViolation("pool deposit exhausted")` (`foliant/chain.py:382`) — it does not transparently
+commit more. So "any length" is not merely loose, it names the one thing that fails. The first
+sentence of the README is fine (see above); this is the paragraph under it.
+
+**Fix.** "so a session settles in one transaction however many calls it contains, up to the value
+committed." Slightly longer, and it plants the deposit idea before the reader meets step 5.
+
+### R2-5. Low — step 3 prints "deposited" twice, and one of them is an ERC-20 approve
+
+**Location:** `examples/try_fuji.py:178-179`; `ChainAgent.deposit` sends `approve` then `deposit`
+(`foliant/chain.py:291-295`).
+
+Real output:
+
+```
+   registered: 0x29df3a1c…
+   deposited: 0x3638f947…
+   deposited: 0x6729abe8…
+```
+
+A reader who clicks both — exactly the reader this page is written for, since the whole pitch is
+"check it yourself" — finds that one is an `approve`. Two identical labels on two different
+operations is a small thing that reads as carelessness on a page whose selling point is that it is
+careful.
+
+**Fix.** `show()` takes one label for a batch; give it a list, or call it per transaction:
+`approved` then `deposited`.
+
+### R2-6. Low — the step-6 check is an `assert`, so `python -O` removes it, and its failure is a traceback
+
+**Location:** `examples/try_fuji.py:228`.
+
+Two small problems with an otherwise excellent idea. `assert` is stripped under `python -O`, so the
+one claim the page says is "checked rather than asserted" is the one claim that can be compiled
+out. And when it does fire, the reader gets a bare `AssertionError` traceback — the only unhandled
+exit path left in a script that now routes everything else through `fail()`.
+
+The printed count (`and 0 transactions sent`) is not strippable and is the real user-visible check,
+so the damage is bounded either way.
+
+**Fix.** `if len(worker_sent) != before: return fail(f"{len(worker_sent) - before} transaction(s)
+were sent during the calls — that is a bug, please open an issue")`. Same guarantee, survives `-O`,
+and matches the house style.
+
+### R2-7. Low — the sample output is still a paraphrase, not a transcript
+
+**Location:** `docs/try-it.md:23-50`.
+
+Closer than round 1, but still not what the script prints. Missing: the `node` and `accounts` lines
+in step 1; both `deposited:` lines in step 3; the `holding` line's exact shape; the per-call lines
+and the `…` elision in step 6. Since the block is now headed "What it prints", it should be
+literally that — paste a real run and elide only the hashes.
+
+### R2-8. Low — leftovers
+
+- **Hardcoded singular.** `f"{CALLS} paid calls cost {len(worker_sent)} transaction to set up"`
+  (line 265) reads "2 transaction" if the count ever moves off one.
+- **Funds are stranded.** Each run delegates a fresh worker funded with 60 and commits 20, and
+  nothing is ever recalled, so ~40 tokens are abandoned per run across accumulating worker
+  accounts. The run budget is fine (the clean "both nearly empty" message arrives after roughly
+  sixteen runs, which I confirmed is reachable and graceful), but `recall` is 45k gas, is "not a
+  spend" under §4.3, and would both extend the rerun budget severalfold and demonstrate one more
+  property of the tree. Worth considering as a step 9.
+- **Round-2 window accumulation is unexplained.** On the second run the summary reads `worker
+  committed 20.00` but `orchestrator shows 40.00`, because the root's hourly window carries both
+  runs' commitments. That is correct and is arguably the clearest demonstration on the page that
+  ancestors accumulate — but an unprepared reader on their second run just sees two numbers that
+  do not match. One clause would turn a puzzle into the point.
+- **`STATE.touch(mode=0o600)`** (line 139) does not tighten a file that already exists with wider
+  permissions, where the old `chmod` did. Only reachable for someone carrying a state file from an
+  older version, so: trivial.
+
+## What the changes got right, and should not be touched again
+
+- **Promoting the pool join to its own step** rather than deleting the sentence. The fix made the
+  page *more* informative than the version that was wrong, which is the rare outcome.
+- **The runtime assertion with step 5 as its positive control.** Verified it fires. This is now the
+  most trustworthy claim on the page and the mechanism is visible to the reader.
+- **Step 7's rewrite.** "The policy is a precondition inside `AgentAccounts.commit`, which
+  `PaymentChannels.open` must call" — names the mechanism, names the method, and the printed string
+  is the contract's own revert reason. Precise and checkable.
+- **Step 8's retreat from a claim to a description.** "Settlement is the provider's business, not
+  the payer's" was always the honest framing and it now sits where the reader meets it.
+- **The troubleshooting table**, which is now better than the rest of the genre manages, and the
+  separate `cannot reach the chain node` message naming the second host.
+- **The README's first three sentences.** Defensible, concrete, and they survive a sceptical read.

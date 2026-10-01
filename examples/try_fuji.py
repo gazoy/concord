@@ -26,9 +26,11 @@ from pathlib import Path
 SERVER = os.environ.get("FOLIANT_DEMO", "https://fuji.foliant.network").rstrip("/")
 STATE = Path(os.environ.get("FOLIANT_TRY_STATE", Path.home() / ".foliant-try.json"))
 CALLS = int(os.environ.get("FOLIANT_TRY_CALLS", "25"))
-# testnets and private chains only: this script funds itself from a tap and is not written to be
-# careful with anything of value. Avalanche mainnet (43114) is deliberately absent.
-EXPLORERS = {43113: "https://testnet.snowtrace.io", 31337: ""}
+EXPLORERS = {43113: "https://testnet.snowtrace.io"}
+# testnets and private chains only: this script funds itself from a tap and takes no care with
+# anything of value. Avalanche mainnet (43114) is deliberately absent; add your own devnet with
+# FOLIANT_ALLOW_CHAIN=1337 if you are running one.
+ALLOWED = {43113, 31337} | {int(x) for x in os.environ.get("FOLIANT_ALLOW_CHAIN", "").replace(",", " ").split()}
 explorer = ""
 
 try:
@@ -55,8 +57,10 @@ def fail(problem: str, hint: str = "") -> int:
 
 
 def amount(n: int) -> str:
-    """Token amounts, always in tokens, so nothing in this script is quoted at two scales."""
-    return f"{n / UNIT:,.2f}"
+    """Token amounts, always in tokens, so nothing in this script is quoted at two scales. A server
+    priced far below the token's scale gets enough decimal places to be read rather than '0.00'."""
+    places = 2 if n == 0 or abs(n) >= UNIT // 100 else len(str(UNIT)) - 1
+    return f"{n / UNIT:,.{places}f}"
 
 
 def step(n: int, what: str) -> None:
@@ -88,9 +92,13 @@ def record(agent):
     return sent
 
 
-def show(sent: list, label: str, first: int) -> int:
-    """Print every transaction sent since `first`, and return the new mark."""
-    for h in sent[first:]:
+def show(sent: list, labels, first: int) -> int:
+    """Print every transaction sent since `first`, and return the new mark. `labels` is one name, or
+    one per transaction where a single call makes more than one (a deposit approves, then moves)."""
+    new = sent[first:]
+    if isinstance(labels, str):
+        labels = [labels] * len(new)
+    for h, label in zip(new, labels):
         print(f"   {label}: {link('tx', h)}")
     return len(sent)
 
@@ -107,10 +115,11 @@ def main() -> int:
         return fail(f"cannot reach {SERVER}: {e}",
                     "The demo server may be down, or a proxy may be in the way. The same script runs\n"
                     "against a server of your own: see deploy/README.md in the repository.")
-    if chain["chainId"] not in EXPLORERS:
+    if chain["chainId"] not in ALLOWED:
         return fail(f"this script only runs against a testnet; the server is on chain {chain['chainId']}.",
-                    "It funds itself from a tap and takes no care with anything of value.")
-    explorer = EXPLORERS[chain["chainId"]]
+                    "It funds itself from a tap and takes no care with anything of value. If that chain is a\n"
+                    "devnet of your own, set FOLIANT_ALLOW_CHAIN to its id.")
+    explorer = EXPLORERS.get(chain["chainId"], "")
     price = chain["price"]
     print(f"   network   {chain['network']} (chain id {chain['chainId']})")
     print(f"   node      {chain['rpc']}")
@@ -176,7 +185,7 @@ def main() -> int:
             return fail("the orchestrator's account and the wallet are both nearly empty.",
                         f"Delete {STATE} to start over with a new key, or send test tokens to {acct.address}.")
         boss.deposit(token.address, min(wallet, 500 * UNIT))
-        mark = show(boss_sent, "deposited", mark)
+        mark = show(boss_sent, ("approved", "deposited"), mark)
         held = L.accounts.functions.balanceOf(root, token.address).call()
     print(f"   account   0x{root.hex()[:16]}… holding {amount(held)} tokens")
 
@@ -225,7 +234,9 @@ def main() -> int:
             print(f"   call {i + 1:<3} paid {amount(r.json()['paid'])}, answered {r.json()['echo']!r}")
         elif i == 3:
             print(f"   …")
-    assert len(worker_sent) == before, "a call sent a transaction; that would be a bug"
+    if len(worker_sent) != before:  # not an assert: this is the claim the page makes, so it is always checked
+        return fail(f"{len(worker_sent) - before} transaction(s) were sent while paying for calls.",
+                    "Paying should never touch the chain. Please open an issue with this output.")
     print(f"   {len(client.receipts)} signed receipts, {amount(CALLS * price)} paid, "
           f"and {len(worker_sent) - before} transactions sent")
 
@@ -261,8 +272,10 @@ def main() -> int:
     spent_worker = L.accounts.functions.spentInWindow(worker_id).call()
     print(f"\n{BOLD}What the chain now says{OFF}")
     print(f"   worker committed   {amount(spent_worker)} of its {amount(worker_policy.per_window_max)} this hour")
-    print(f"   orchestrator shows {amount(spent_root)} — a worker's commitment counts against its parent too")
-    print(f"\n{CALLS} paid calls cost {len(worker_sent)} transaction to set up and one to settle.")
+    print(f"   orchestrator shows {amount(spent_root)} — the total its workers have committed this hour,")
+    print(f"                      because every payment is recorded against every account above it")
+    n = len(worker_sent)
+    print(f"\n{CALLS} paid calls cost {n} transaction{'' if n == 1 else 's'} to set up and one to settle.")
     print("A worker cannot exceed its budget, and no crew can exceed the orchestrator's, because")
     print("every payment is checked against every account above it before any value moves.")
     print("\nHow it works: https://github.com/gazoy/concord/blob/main/docs/spec/spending-policy.md")
