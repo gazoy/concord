@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from web3 import Web3
 
-from foliant.chain import (HDR_PAYMENT, ChainAgent, ChainGate, ChainLedger, ChainOffer, ChainPayment, ChainPolicy,
+from foliant.chain import (HDR_PAYMENT, MAX_TREE_DEPTH, ChainAgent, ChainGate, ChainLedger, ChainOffer, ChainPayment, ChainPolicy,
                            PaymentRequired, _b64, _hex, _unb64, deploy_local)
 from foliant.errors import FoliantError
 
@@ -999,3 +999,93 @@ def test_v3_stale_recovery_bounds(chain, tmp_path):  # VERIFY-3 stale-update rec
     payer.confirm(cid)  # confirming an unpaid discard moves the client's own baseline only
     with pytest.raises(PaymentRequired):
         gate.verify(_header("foliant-channel", {**payer.latest[cid]}))  # gate still at 27: stale
+
+
+def _cross_bucket_on_send(monkeypatch, L, bucket_len):
+    """Let the next bucket boundary pass after the gas limit is fixed and before the block executes."""
+    real = L.w3.eth.send_raw_transaction
+
+    def warp_then_send(raw):
+        _warp(L, bucket_len + 5)
+        return real(raw)
+
+    monkeypatch.setattr(L.w3.eth, "send_raw_transaction", warp_then_send)
+
+
+# These two warp the module-scoped chain forward by a couple of bucket lengths (evm_increaseTime is
+# cumulative). Time only moves forward, which the rest of this module tolerates - its shortest pool timeout
+# is 1 second and it sets no policy expiries - but a test added after these should not assume otherwise.
+
+def test_commit_estimated_before_a_bucket_boundary_does_not_run_out_of_gas(chain, monkeypatch):
+    """A commit's gas depends on block.timestamp: the spend window is a ring of time buckets, and the first
+    commit to land in a bucket writes that slot where a later one in the same bucket only increments it.
+    estimateGas runs against the bucket current when it runs, so a transaction estimated just before a
+    boundary and executed just after it was short, ran out of gas, and was mined as a failed transaction.
+    It surfaced as a rare suite failure and would have hit real spends on Fuji a few seconds in every
+    bucket. The check is that the transaction did not spend its whole limit, not merely that it succeeded:
+    without the headroom it fails as out-of-gas rather than on any revert."""
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    window = 3600
+    bucket_len = (window + 30) // 31  # ceil(windowSecs / (SLOTS - 1)), AgentAccounts._record
+    agent = _funded_agent(L, token, KEYS[1], amount=100_000, policy=ChainPolicy(5000, 1_000_000, window))
+    agent.open_channel(prov, token, 100, 3600, salt=9001)  # warm the bucket the next estimate will see
+
+    _cross_bucket_on_send(monkeypatch, L, bucket_len)
+    cid = agent.open_channel(prov, token, 100, 3600, salt=9002)
+
+    assert L.channel(cid)["deposit"] == 100
+    r = L.w3.eth.get_transaction_receipt(agent.sent[-1])
+    assert r["gasUsed"] < L.w3.eth.get_transaction(agent.sent[-1])["gas"], "spent its whole gas limit"
+
+
+def test_bucket_boundary_headroom_covers_every_account_in_the_tree(chain, monkeypatch):
+    """The window is recorded against the account AND each of its ancestors, so the rollover costs one
+    slot write per level and a flat allowance is not enough below the root. A child two levels down needs
+    three times the headroom; this fails if ChainAgent._tree_levels() ever answers 1 for a nested account,
+    which is what a cached failed walk used to produce."""
+    L, addrs = chain
+    token = addrs["token"]
+    prov = Account.from_key(KEYS[3]).address
+    window = 3600
+    bucket_len = (window + 30) // 31
+    pol = ChainPolicy(5000, 1_000_000, window)
+    root = _funded_agent(L, token, KEYS[1], amount=400_000, policy=pol)
+    mid_id = root.delegate(Account.from_key(KEYS[2]).address, pol, token, 200_000, salt=6101)
+    mid = ChainAgent(L, KEYS[2], account_id=mid_id)
+    leaf_id = mid.delegate(Account.from_key(KEYS[4]).address, pol, token, 100_000, salt=6102)
+    leaf = ChainAgent(L, KEYS[4], account_id=leaf_id)
+    assert leaf._tree_levels() == 3
+
+    leaf.open_channel(prov, token, 100, 3600, salt=9101)  # warm the bucket for leaf, mid and root alike
+
+    _cross_bucket_on_send(monkeypatch, L, bucket_len)
+    cid = leaf.open_channel(prov, token, 100, 3600, salt=9102)
+
+    assert L.channel(cid)["deposit"] == 100
+    r = L.w3.eth.get_transaction_receipt(leaf.sent[-1])
+    assert r["gasUsed"] < L.w3.eth.get_transaction(leaf.sent[-1])["gas"], "spent its whole gas limit"
+
+
+def test_tree_levels_does_not_cache_an_unfinished_walk(chain):
+    """A node that fails one parentOf call must not pin a deep agent at one level for its lifetime: the
+    under-estimate would come back silently and only on that agent."""
+    L, addrs = chain
+    token = addrs["token"]
+    pol = ChainPolicy(5000, 1_000_000, 3600)
+    root = _funded_agent(L, token, KEYS[1], amount=200_000, policy=pol)
+    child_id = root.delegate(Account.from_key(KEYS[2]).address, pol, token, 100_000, salt=6201)
+    child = ChainAgent(L, KEYS[2], account_id=child_id)
+
+    real_call = L.accounts.functions.parentOf
+
+    def broken(_id):
+        raise ConnectionError("node refused")
+
+    L.accounts.functions.parentOf = broken
+    try:
+        assert child._tree_levels() == MAX_TREE_DEPTH  # conservative, and not remembered
+    finally:
+        L.accounts.functions.parentOf = real_call
+    assert child._tree_levels() == 2

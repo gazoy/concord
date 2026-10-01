@@ -64,6 +64,21 @@ def _check_sig(sig: Any) -> bytes:
     return b
 
 
+def _failed(what: str, receipt, gas_limit: int) -> str:
+    """Why something that passed estimateGas was still mined as a failure.
+
+    The two cases need different answers, so they are told apart rather than both reported as a revert:
+    a transaction that spent its whole limit cost more in its block than in the state it was estimated
+    against (see GAS_HEADROOM), while one that stopped short reverted on a condition that changed in
+    between - a policy expiry or an escalation deadline passing, say - which no gas limit can help."""
+    h = _hex(receipt["transactionHash"])
+    used = receipt["gasUsed"]
+    if used >= gas_limit:
+        return (f"{what} ran out of gas: {h} (used its whole limit of {gas_limit}; it was estimated "
+                f"against earlier state)")
+    return f"{what} reverted: {h} (used {used} gas of {gas_limit}; it passed estimateGas, so state changed)"
+
+
 def _decode_revert(e: Exception, *contracts) -> Exception:
     """Map a web3 revert to the reference's error classes (AUDIT-3 A3-8)."""
     data = getattr(e, "data", None)
@@ -95,6 +110,27 @@ HDR_RECEIPT = "X-PAYMENT-RESPONSE"
 X402_VERSION = 1
 
 NETWORKS = {43113: "avalanche-fuji", 43114: "avalanche", 31337: "anvil"}
+
+# Gas headroom over eth_estimateGas. A transaction can cost more in the block that executes it than it did
+# in the state it was estimated against, and one estimated without headroom then runs out of gas and is
+# mined as a failed transaction that spent its whole limit. Two such cliffs reach these calls:
+#   * the spend window is a ring of time buckets (AgentAccounts._record), and the first commit to land in a
+#     bucket writes that slot where a later one in the same bucket only increments it. `Slot` packs `end`
+#     (uint64) and `amount` (uint128) into one word, so the rollover is a single SSTORE_SET rather than an
+#     update: 16,630 gas measured on Avalanche-equivalent pricing, for every account the commit records
+#     against, which is the account and its ancestors (AgentAccounts._authorise). Crossing a bucket boundary
+#     between the estimate and the block is enough to trigger it, so the exposure is roughly the time to
+#     inclusion over ceil(windowSecs / 31) - a few percent of commits at a one-hour window, and every commit
+#     at a window under about a minute.
+#   * an ERC-20 transfer to a payee whose balance is swept to zero after the estimate writes that balance
+#     from zero instead of updating it: a further 17,100 (SSTORE_SET - SSTORE_RESET).
+# Both can land on one transaction, so the allowance is set above their sum. Headroom is not spent when it
+# is not needed - gas is charged on what a transaction uses, not on the limit it sets - but a node does
+# require `maxFeePerGas * gas` to be covered at submission, so it goes only on the sends that can hit a
+# cliff rather than on every send. Note that a policy expiry or an escalation deadline passing between the
+# estimate and the block fails the same way with gas to spare; no headroom helps there (see _failed).
+GAS_HEADROOM = 40_000  # per account recorded; over 16,630 (bucket rollover) + 17,100 (zero-balance payee)
+MAX_TREE_DEPTH = 16    # AgentAccounts.MAX_DEPTH; bounds the walk in ChainAgent._tree_levels
 
 
 def deployments() -> dict:
@@ -261,6 +297,7 @@ class ChainAgent:
         self.key = Account.from_key(private_key)
         self.address = self.key.address
         self.account_id: Optional[bytes] = account_id
+        self._levels: tuple[Optional[bytes], int] = (None, 0)  # (account id, accounts that record a commit)
         self.sent: list[str] = []             # every transaction this agent has broadcast, newest last
         self.latest: dict[bytes, dict] = {}   # channel/pool id -> last update the provider accepted
         self.pending: dict[bytes, dict] = {}  # channel/pool id -> last update signed but not yet confirmed
@@ -269,19 +306,49 @@ class ChainAgent:
 
     # transactions
 
-    def _send(self, fn, value: int = 0) -> dict:
+    def _tree_levels(self) -> int:
+        """How many accounts a commit records against: this one and its ancestors (AgentAccounts._authorise).
+
+        Cached per account id, and only ever from a walk that finished: a node that fails one `parentOf`
+        call must not pin a deep account at one level for the life of the agent, which would quietly
+        restore the under-estimate this headroom exists to cover. An unfinished walk assumes the deepest
+        tree the contract allows instead, which costs a larger gas limit and nothing else."""
+        key, n = self._levels
+        if n and key == self.account_id:
+            return n
+        if self.account_id is None:  # not registered yet: nothing to walk, and the answer cannot change
+            return 1
+        n, cur = 1, self.account_id
+        try:
+            for _ in range(MAX_TREE_DEPTH):
+                parent = self.L.accounts.functions.parentOf(cur).call()
+                if not any(parent):  # bytes32(0): cur is the root
+                    break
+                n += 1
+                cur = parent
+        except Exception:  # noqa: BLE001  - no account yet, or a node that would not answer
+            return MAX_TREE_DEPTH  # deliberately not cached: the next send asks again
+        self._levels = (self.account_id, n)
+        return n
+
+    def _send(self, fn, value: int = 0, commits: bool = False) -> dict:
+        """Send `fn`. `commits` marks the calls that reach AgentAccounts.commit, which are the ones that
+        need gas headroom (GAS_HEADROOM); it is resolved before the estimate so its `parentOf` calls do not
+        themselves widen the gap between the estimate and the block that executes the transaction."""
         w3 = self.L.w3
+        headroom = GAS_HEADROOM * self._tree_levels() if commits else 0
         try:
             tx = fn.build_transaction({"from": self.address, "nonce": w3.eth.get_transaction_count(self.address, "pending"),
                                        "value": value, "chainId": self.L.chain_id})
         except (ContractCustomError, ContractLogicError) as e:
             raise _decode_revert(e) from None  # estimateGas reverted: nothing was sent, no gas spent
+        tx["gas"] = tx["gas"] + headroom
         signed = self.key.sign_transaction(tx)
         h = w3.eth.send_raw_transaction(signed.raw_transaction)
         r = w3.eth.wait_for_transaction_receipt(h)
         self.sent.append(_hex(r["transactionHash"]))
         if r["status"] != 1:
-            raise FoliantError(f"transaction reverted: {h.hex()}")
+            raise FoliantError(_failed("transaction", r, tx["gas"]))
         return r
 
     def register(self, policy: ChainPolicy, salt: int = 0, signer: Optional[str] = None) -> bytes:
@@ -297,7 +364,7 @@ class ChainAgent:
 
     def transfer(self, token: str, payee: str, amount: int) -> None:
         self._send(self.L.accounts.functions.transfer(self.account_id, Web3.to_checksum_address(token),
-                                                      Web3.to_checksum_address(payee), amount, b"", 0))
+                                                      Web3.to_checksum_address(payee), amount, b"", 0), commits=True)
 
     def delegate(self, signer: str, policy: ChainPolicy, token: str, fund: int, salt: int = 0) -> bytes:
         self._send(self.L.accounts.functions.delegate(self.account_id, Web3.to_checksum_address(signer), policy.as_tuple(),
@@ -310,11 +377,11 @@ class ChainAgent:
     def open_channel(self, payee: str, token: str, deposit: int, timeout_secs: int = 3600, salt: int = 0) -> bytes:
         payee = Web3.to_checksum_address(payee)
         self._send(self.L.channels.functions.open(self.account_id, payee, Web3.to_checksum_address(token), deposit,
-                                                  timeout_secs, salt, b"", 0))
+                                                  timeout_secs, salt, b"", 0), commits=True)
         return self.L.channels.functions.channelId(self.account_id, payee, salt).call()
 
     def join_pool(self, pid: bytes, deposit: int) -> None:
-        self._send(self.L.pools.functions.join(pid, self.account_id, deposit, b"", 0))
+        self._send(self.L.pools.functions.join(pid, self.account_id, deposit, b"", 0), commits=True)
         self.latest.pop(pid, None)
         self.pending.pop(pid, None)
         self._seq.pop(pid, None)
@@ -571,10 +638,13 @@ class ChainGate:
                                        "nonce": w3.eth.get_transaction_count(self.key.address, "pending")})
         except (ContractCustomError, ContractLogicError) as e:
             raise _decode_revert(e) from None
+        # settling pays the payee in ERC-20: a payee swept to zero between the estimate and the block makes
+        # that a write from zero rather than an update. Nothing here commits, so one allowance is enough.
+        tx["gas"] = tx["gas"] + GAS_HEADROOM
         h = w3.eth.send_raw_transaction(self.key.sign_transaction(tx).raw_transaction)
         r = w3.eth.wait_for_transaction_receipt(h)
         if r["status"] != 1:
-            raise FoliantError(f"settlement reverted: {h.hex()}")
+            raise FoliantError(_failed("settlement", r, tx["gas"]))
         return r
 
     def create_pool(self, timeout_secs: int = 3600, salt: int = 0) -> bytes:
