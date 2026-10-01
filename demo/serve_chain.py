@@ -42,7 +42,8 @@ MAX_TAP_BODY = 1024  # bytes; POST /tap takes one address and nothing else (F-11
 
 def make_app() -> FastAPI:
     env = os.environ
-    L = ChainLedger(env["FOLIANT_RPC"], env["FOLIANT_ACCOUNTS"], env["FOLIANT_CHANNELS"], env["FOLIANT_POOLS"])
+    rpc_url = env["FOLIANT_RPC"]  # captured now: `env` is live, and a request must not depend on it
+    L = ChainLedger(rpc_url, env["FOLIANT_ACCOUNTS"], env["FOLIANT_CHANNELS"], env["FOLIANT_POOLS"])
     from eth_account import Account
     provider = Account.from_key(env["PROVIDER_KEY"]).address
     offer = ChainOffer(provider, env["FOLIANT_TOKEN"], int(env.get("FOLIANT_PRICE", "3")), descriptor={"model": "echo-1"})
@@ -114,7 +115,8 @@ def make_app() -> FastAPI:
 
     @app.get("/chain")
     def chain():
-        return {"network": L.network, "chainId": L.chain_id, "contracts": {"accounts": L.accounts.address,
+        return {"network": L.network, "chainId": L.chain_id, "rpc": rpc_url,
+                "contracts": {"accounts": L.accounts.address,
                 "channels": L.channels.address, "pools": L.pools.address}, "token": offer.token,
                 "provider": provider, "poolId": _hex(offer.pool_id), "price": offer.price_per_unit,
                 "tap": tap.status() if tap else None}

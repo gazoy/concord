@@ -22,11 +22,24 @@ machines as contracts; the tests here become its conformance suite.
 
 The project was called Concord until 28 September 2026; the name was changed to Foliant after a UK trade-mark search. Older links, issues and messages that say Concord refer to this project.
 
+## Try it
+
+[**Try Foliant on Avalanche Fuji**](docs/try-it.md) — ten minutes, no wallet and no faucet: give a
+worker agent an on-chain budget, watch the chain refuse a payment that breaks it, and settle a
+session of calls in one transaction.
+
+```bash
+pip install "foliant-protocol[chain]" httpx
+curl -O https://raw.githubusercontent.com/gazoy/concord/main/examples/try_fuji.py
+python try_fuji.py
+```
+
 ## Documents
 
 - Website: [foliant.network](https://foliant.network) (served from `docs/` via GitHub Pages)
 - [Whitepaper v0.1](docs/whitepaper.md) — the full design (§6 is what this repo implements)
 - [Design, feasibility and cost study](docs/study.md) — chain survey, build routes, costs, risks
+- [Try it on Fuji](docs/try-it.md) — the ten-minute walkthrough above, with what each step proves
 - [Agent Spending Policy, draft 0.1](docs/spec/spending-policy.md) — the policy tree as a chain-agnostic specification: schema, 115 conformance vectors run against both references, an x402 `exact` binding, and an [independent review](docs/spec/REVIEW-1.md)
 
 ## Demo

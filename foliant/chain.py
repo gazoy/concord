@@ -609,7 +609,7 @@ class ChainGate:
                 except FoliantError:
                     continue  # keep it; try again next time
                 total += u["balance"] - ch["paid"]
-                txs.append(r["transactionHash"].hex())
+                txs.append(_hex(r["transactionHash"]))
                 self.latest.pop(key, None)
             else:
                 acct = bytes.fromhex(u["account"][2:])
@@ -623,14 +623,14 @@ class ChainGate:
             before = token.functions.balanceOf(self.key.address).call()
             try:
                 r = self._send(self.L.pools.functions.settle(pid, [t for _, t in pool_batch]))
-                txs.append(r["transactionHash"].hex())
+                txs.append(_hex(r["transactionHash"]))
                 for key, _ in pool_batch:
                     self.latest.pop(key, None)
             except FoliantError:
                 for key, t in pool_batch:  # one bad entry must not block the rest
                     try:
                         r = self._send(self.L.pools.functions.settle(pid, [t]))
-                        txs.append(r["transactionHash"].hex())
+                        txs.append(_hex(r["transactionHash"]))
                         self.latest.pop(key, None)
                     except FoliantError:
                         self.latest.pop(key, None)  # unsettleable: drop it rather than retry forever
