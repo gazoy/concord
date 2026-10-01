@@ -1,6 +1,6 @@
-# Agent Spending Policy — specification, draft 0.2
+# Agent Spending Policy — specification, draft 0.1
 
-**Status:** draft for comment. Draft 0.1 was revised after an independent review (`REVIEW-1.md`); draft 0.2 adds per-asset caps (§2.3), which close what 0.1 listed as its first open issue. **Reference:** `foliant/accounts.py` (Python), `contracts/src/AgentAccounts.sol` (EVM), `foliant-js` (TypeScript). **Vectors:** `vectors.json` in this directory. **Schema:** `spending-policy.schema.json`.
+**Status:** draft for comment; revised after an independent review (`REVIEW-1.md`). **Reference:** `foliant/accounts.py` (Python), `contracts/src/AgentAccounts.sol` (EVM), `foliant-js` (TypeScript). **Vectors:** `vectors.json` in this directory. **Schema:** `spending-policy.schema.json`.
 
 This document specifies a spending policy for agent accounts: a small, chain-agnostic object that bounds what an account may pay, a rule for arranging accounts in a tree so that a crew shares one bound, and the exact evaluation an implementation must perform. It is written so that a wallet, a payment facilitator and a ledger can each evaluate the same policy and agree; the conformance vectors are the test of that agreement.
 
@@ -12,7 +12,7 @@ The policy is independent of how payments are settled. §7 binds it to the x402 
 - **Spend.** Value leaving the tree: a transfer to an address outside the tree, or a deposit committed to a channel, pool, escrow or other settlement construct in favour of an outside payee. Moving value between accounts in the same tree is not a spend (§4.3).
 - **Payee.** The address that a spend benefits. For a channel or pool deposit it is the channel's payee or the pool's coordinator, not the contract holding the deposit.
 - **Window.** The trailing period of `windowSecs` seconds ending at evaluation time, over which spends are summed.
-- **Amount.** An unsigned integer in the smallest unit of the asset being spent (§2.3).
+- **Amount.** An unsigned integer in the smallest unit of the asset being spent (see §8.1 on assets).
 
 Requirement words (MUST, SHOULD, MAY) are as in RFC 2119.
 
@@ -44,42 +44,13 @@ Amounts are decimal strings matching `^(0|[1-9][0-9]*)$` (no sign, no leading ze
 
 **2.1 Addresses.** An address is a string. Two addresses are equal when their canonical forms are equal. For EVM addresses the canonical form is `0x` followed by 40 lowercase hex digits; other chains define their own. Implementations MUST canonicalise every address on input — policy lists when a policy is loaded, and the payee when a spend is evaluated — and compare canonical forms. (Vectors `check-030` and `check-031` give a payee and a list entry in mixed case for this reason.)
 
-**2.2 Canonical encoding and policy id.** The canonical encoding is the JSON object with exactly the seven fields above (a `null` field is present, not omitted) plus `assets` when and only when it is not `null` (§2.3), keys sorted bytewise, no whitespace, `perTxMax`/`perWindowMax` as strings, `windowSecs`/`expiry` as integers, addresses in canonical form, `allowList` and `denyList` sorted bytewise on their canonical strings and duplicate-free, and a key-form `escalation` as `{"key": <lowercase hex>, "scheme": <name>}`. `assets` is the one field omitted rather than encoded when absent, so that a policy written against draft 0.1 keeps the id it had: adding a field that every 0.1 policy would have to carry as `null` would have changed every existing id for no gain. The **policy id** is the lowercase hex SHA-256 of that encoding's UTF-8 bytes (vectors of kind `id`). Two policies with the same id are the same policy. Implementations that hash a binary struct instead (the EVM reference) are exempt from this id but MUST provide a deterministic id with the same equality property. The Python reference uses a different internal encoding for its signed envelopes and exposes the specification id separately as `Policy.spec_id`.
-
-**2.3 Assets.** In draft 0.1 amounts are nominal: `perTxMax` and `perWindowMax` count units without regard to which asset is leaving, so a policy is meaningful only for an account that spends one asset, or several with the same decimals and comparable value. The optional `assets` field removes that restriction.
-
-```json
-"assets": {
-  "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
-    "decimals": 6,
-    "perTxMax": "500000000",
-    "perWindowMax": "2000000000"
-  }
-}
-```
-
-| Field | Type | Meaning |
-|---|---|---|
-| `assets` | object, or `null`/absent | When present, the assets this policy permits, keyed by canonical asset id. `null` or absent keeps the 0.1 behaviour: the asset is not examined. `{}` permits no asset. |
-| *key* | asset id | A CAIP-19 asset identifier, canonically lowercase: for an EVM token, `eip155:<chainId>/erc20:<address>`. Two asset ids are equal when their canonical forms are equal (§2.1 applies to the address part). |
-| `decimals` | uint8 | The asset's decimals as the policy's author understood them. |
-| `perTxMax`, `perWindowMax` | uint, decimal string | As §2, but for this asset alone, in this asset's smallest unit. |
-
-The rules:
-
-- **Deny by default.** When `assets` is present, a spend of an asset it does not name is refused (`asset_not_allowed`). A field that named some assets and silently permitted the rest would bound nothing.
-- **Decimals are pinned, and strictly.** A cap is in the asset's smallest unit, so a `decimals` that does not match the asset misstates that cap by a power of ten. An evaluator that can determine the asset's decimals MUST refuse the spend with `asset_decimals_mismatch` when they differ, and an evaluator that cannot determine them MUST refuse with the same code rather than assume. The strictness is deliberate: the error it prevents is a limit wrong by six orders of magnitude, and refusing to pay is the cheap failure.
-- **The §2 caps still apply.** `perTxMax` and `perWindowMax` remain required and are still checked against the nominal amount, in addition to the asset's own caps, so they act as an aggregate ceiling across assets. An author who does not want that ceiling to bind SHOULD set it to the largest per-asset cap.
-- **Each named asset accumulates separately**, over the policy's single `windowSecs`. The window *length* is a property of the policy; the accumulation is per asset. §6 applies unchanged to each. One length rather than one per asset is a deliberate limit on how much window state an account carries.
-- **Ancestors record per asset.** Under §4.2 each ancestor records the spend against the same asset in its own per-asset window, exactly as it records the nominal amount.
-
-A deployment caveat follows from the third rule and MUST be understood before relying on this field. An evaluator implementing only draft 0.1 ignores `assets` and enforces the §2 caps, so the presence of the field can never make the *amount* bound more permissive than it was. It does not enforce the asset restriction at all. In a deployment where some evaluation points implement §2.3 and some do not, the amount bound holds everywhere and the asset bound holds only at the former. An operator who depends on the asset restriction MUST ensure every point that can authorise a spend implements §2.3.
+**2.2 Canonical encoding and policy id.** The canonical encoding is the JSON object with exactly the seven fields above (a `null` field is present, not omitted), keys sorted bytewise, no whitespace, `perTxMax`/`perWindowMax` as strings, `windowSecs`/`expiry` as integers, addresses in canonical form, `allowList` and `denyList` sorted bytewise on their canonical strings and duplicate-free, and a key-form `escalation` as `{"key": <lowercase hex>, "scheme": <name>}`. The **policy id** is the lowercase hex SHA-256 of that encoding's UTF-8 bytes (vectors of kind `id`). Two policies with the same id are the same policy. Implementations that hash a binary struct instead (the EVM reference) are exempt from this id but MUST provide a deterministic id with the same equality property. The Python reference uses a different internal encoding for its signed envelopes and exposes the specification id separately as `Policy.spec_id`.
 
 ## 3. Evaluating a single policy
 
-`check(policy, amount, payee, now, spentInWindow, escalated, asset?, assetSpentInWindow?) → ok | reason`
+`check(policy, amount, payee, now, spentInWindow, escalated) → ok | reason`
 
-Inputs: the policy; the spend's `amount` and canonical `payee`; the evaluation time `now`; the sum `spentInWindow` of the account's spends recorded in the window ending at `now` (§6); whether a valid escalation co-signature accompanies the spend (§5); and, where the settlement construct distinguishes assets, the spend's canonical `asset` id and `assetSpentInWindow`, the sum recorded in that asset's window (§2.3). The last two are required whenever the policy has an `assets` field; an evaluator that cannot supply them MUST NOT evaluate such a policy.
+Inputs: the policy; the spend's `amount` and canonical `payee`; the evaluation time `now`; the sum `spentInWindow` of the account's spends recorded in the window ending at `now` (§6); and whether a valid escalation co-signature accompanies the spend (§5).
 
 The checks MUST be applied in this order, and the first failure is the result. The order matters only for the reason reported; any failure rejects.
 
@@ -89,14 +60,10 @@ The checks MUST be applied in this order, and the first failure is the result. T
 | 2 | `expiry` is not `null` and `now >= expiry` | `expired` |
 | 3 | `payee ∈ denyList` | `payee_denied` |
 | 4 | `allowList` is not `null` and `payee ∉ allowList` | `payee_not_allowed` |
-| 5 | `assets` is present and the spend's asset is not one it names | `asset_not_allowed` |
-| 6 | `assets` is present and the asset's decimals are not confirmed equal to the pinned `decimals` | `asset_decimals_mismatch` |
-| 7 | `amount > assets[asset].perTxMax` and not `escalated` | `asset_per_tx_exceeded` |
-| 8 | `amount > perTxMax` and not `escalated` | `per_tx_exceeded` |
-| 9 | `assetSpentInWindow + amount > assets[asset].perWindowMax` | `asset_per_window_exceeded` |
-| 10 | `spentInWindow + amount > perWindowMax` | `per_window_exceeded` |
+| 5 | `amount > perTxMax` and not `escalated` | `per_tx_exceeded` |
+| 6 | `spentInWindow + amount > perWindowMax` | `per_window_exceeded` |
 
-Notes. `escalated` MUST be false when `escalation` is `null`; an evaluator handed a co-signature for such a policy rejects it before the policy check, with no §3 code. Expiry is inclusive at the boundary: a policy with `expiry = T` permits nothing at `now = T`. A zero amount passes checks 5 and 6 trivially but is still subject to 2–4; an implementation MAY refuse zero-amount spends before the policy check as a matter of ledger hygiene (the EVM reference does), which is not a policy result and has no reason code here. Escalation lifts checks 5 and 6 in draft 0.1 numbering, which are 7 and 8 here: both per-transaction caps, the asset's and the nominal one. It never relaxes either window check (9 and 10): the window cap is the ceiling on loss even with the co-signer's cooperation, and that is as true per asset as it is in aggregate. Arithmetic in check 6 MUST NOT overflow; implementations using fixed-width integers MUST reject rather than wrap. An amount a binary implementation cannot represent (≥ 2¹²⁸ in the EVM reference) is rejected at decode time, like an invalid policy, and is not a policy result; vectors never carry such an amount.
+Notes. `escalated` MUST be false when `escalation` is `null`; an evaluator handed a co-signature for such a policy rejects it before the policy check, with no §3 code. Expiry is inclusive at the boundary: a policy with `expiry = T` permits nothing at `now = T`. A zero amount passes checks 5 and 6 trivially but is still subject to 2–4; an implementation MAY refuse zero-amount spends before the policy check as a matter of ledger hygiene (the EVM reference does), which is not a policy result and has no reason code here. Escalation never relaxes check 6: the window cap is the ceiling on loss even with the co-signer's cooperation. Arithmetic in check 6 MUST NOT overflow; implementations using fixed-width integers MUST reject rather than wrap. An amount a binary implementation cannot represent (≥ 2¹²⁸ in the EVM reference) is rejected at decode time, like an invalid policy, and is not a policy result; vectors never carry such an amount.
 
 ## 4. Trees
 
@@ -109,17 +76,13 @@ Notes. `escalated` MUST be false when `escalation` is `null`; an evaluator hande
 | 3 | `parent.allowList` is not `null` and (`child.allowList` is `null` or `child.allowList ⊄ parent.allowList`) | `child_allow_wider` |
 | 4 | `parent.denyList ⊄ child.denyList` | `child_deny_narrower` |
 | 5 | `parent.expiry` is not `null` and (`child.expiry` is `null` or `child.expiry > parent.expiry`) | `child_expiry_later` |
-| 6 | `parent.assets` is present and (`child.assets` is absent or names an asset the parent does not) | `child_asset_wider` |
-| 7 | for an asset both name, the pinned `decimals` differ | `child_asset_decimals_mismatch` |
-| 8 | for an asset both name, `child.assets[a].perTxMax > parent.assets[a].perTxMax` | `child_asset_per_tx_wider` |
-| 9 | for an asset both name, `child.assets[a].perWindowMax > parent.assets[a].perWindowMax` | `child_asset_per_window_wider` |
 
-Rows 7 to 9 are evaluated over the assets both policies name, taken in canonical bytewise order, so that the code reported for a child wider in several assets at once is deterministic. A child MAY name fewer assets than its parent, and a parent without an `assets` field constrains none of its child's (the parent's nominal caps still bind the subtree under 4.2). `windowSecs` and `escalation` are deliberately not compared: a child may meter over a different window than its parent (the parent's window still binds the subtree by 4.2), and a child's co-signer lifts only the child's own `perTxMax` (§5). `within` is checked at delegation and whenever a policy is replaced (`setPolicy`); it is a convenience for administrators, not the safety property. The safety property is 4.2.
+`windowSecs` and `escalation` are deliberately not compared: a child may meter over a different window than its parent (the parent's window still binds the subtree by 4.2), and a child's co-signer lifts only the child's own `perTxMax` (§5). `within` is checked at delegation and whenever a policy is replaced (`setPolicy`); it is a convenience for administrators, not the safety property. The safety property is 4.2.
 
 **4.2 Every ancestor checks and records.** A spend from account *A* with ancestors *P₁ … Pₙ* (parent first, root last) is evaluated as:
 
 1. For each of *A, P₁, …, Pₙ* in that order: `check(policy, amount, payee, now, spentInWindow_of_that_account, escalated_for_that_account)`. The first failure rejects the spend and nothing is recorded.
-2. If all pass: record `amount` at `now` in the window of each of *A, P₁, …, Pₙ*, and, for a spend with an asset against a policy that names it, in that account's window for that asset as well (§2.3).
+2. If all pass: record `amount` at `now` in the window of each of *A, P₁, …, Pₙ*.
 
 `escalated_for_that_account` is true only for *A* itself (§5). The two steps together MUST be atomic: an implementation MUST NOT record in some windows and not others, and MUST NOT let a concurrent spend observe a partially recorded state. This is the property the tree provides — *no subtree ever spends more in any window than any ancestor's `perWindowMax`, whatever its own policies say* — and it holds even if a child holds a policy wider than its parent's (for example after the parent was tightened).
 
@@ -167,7 +130,7 @@ A transaction may also fail after a successful simulation because a §3 conditio
 | `amount` | v2: `accepted.amount`; v1: `maxAmountRequired`. Amount strings MUST match `^(0|[1-9][0-9]*)$`, else `malformed_payment`. MUST equal the payload's authorised value (`authorization.value` for EIP-3009, `permit2Authorization.permitted.amount` for Permit2); otherwise `amount_mismatch`. |
 | `payee` | `payTo`, canonicalised. MUST equal the payload's recipient (`authorization.to` or `permit2Authorization.witness.to`); otherwise `payee_mismatch`. |
 | spender (Permit2 only) | `permit2Authorization.spender` MUST be the x402 Permit2 proxy for the network (the SDK deploys one address, `0x402085c2…20001`, on every EVM network it supports); otherwise `spender_mismatch`. A permit naming any other spender grants that contract the tokens whatever `witness.to` says, so the payee would be meaningless. |
-| asset | `asset`, canonicalised; MUST equal the Permit2 token where present (`asset_mismatch`). The evaluator forms the §2.3 asset id from the payment's `network` and `asset` — for EVM, `eip155:<chainId>/erc20:<address>` — and a `network` it cannot map to a CAIP-2 identifier is `malformed_payment`. |
+| asset | `asset`, canonicalised; MUST equal the Permit2 token where present (`asset_mismatch`). See §8.1. |
 | payer | `authorization.from` / `permit2Authorization.from`, canonicalised. An evaluator that knows which account it is evaluating MUST reject a payer that is not that account's payment address (`payer_mismatch`); otherwise a payer could charge another account's window, or escape its own. |
 | `now` | The evaluator's clock at evaluation. Not `validAfter`/`validBefore`, which bound the settlement transaction, not the decision. |
 
@@ -183,7 +146,7 @@ Where the check runs:
 
 ## 8. Open issues in this draft
 
-**8.1 Assets.** Resolved in this draft as per-asset caps with pinned decimals (§2.3); the unit-of-account-with-an-oracle alternative was not taken, because it makes every evaluation depend on a price feed and therefore on that feed's availability and manipulation resistance, which is a larger security surface than the problem warranted. Two parts remain open. A policy still cannot express a cap *across* assets in a common unit — the nominal §2 caps are the only aggregate bound, and they are only meaningful for assets of comparable value — which is where an oracle would be needed and where comments are welcome. And `windowSecs` is one length for the whole policy, so an account cannot meter a volatile asset over a shorter window than a stable one; per-asset window lengths were left out to bound how much window state an account carries, and that trade should be revisited if anyone has the use case.
+**8.1 Assets.** A policy's amounts are nominal: the reference implementations compare `amount` without regard to which asset it is in. A policy is therefore only meaningful for an account that spends one asset, or several with the same decimals and comparable value. Draft 0.2 will add an optional `assets` list with per-asset amounts, or a unit-of-account with an oracle; comments welcome on which.
 
 **8.2 Non-monetary units.** The same object can bound tokens, compute-seconds or API calls if `amount` is read in that unit. The reference implementations do not do this yet.
 
@@ -201,7 +164,7 @@ Where the check runs:
 
 ## 10. Conformance
 
-An implementation conforms to this draft if it passes every vector in `vectors.json` whose `kind` it implements: `policy` (§2 validity), `id` (§2.2), `check` (§3), `within` (§4.1), `window` (§6.1, or §6.2 with the implementation's bound), `tree` (§4.2–4.4), `x402-exact` (§7.2), and `asset-check` / `asset-within` (§2.3). The two asset kinds are new in draft 0.2 and **no reference implementation runs them yet**: §2.3 is specified here and not built, so an implementation claiming draft 0.2 today conforms to §§2–7 as 0.1 did and is explicit that it does not implement §2.3. The EVM reference would need a new deployment to do so, since per-asset accumulation is additional account state; the contracts on Fuji implement draft 0.1. The vector file format is described at its head. The Python reference runs all seven kinds (`tests/test_spec_vectors.py`). The EVM reference runs `check`, `within`, `window`, `tree` and `policy` (`contracts/test/SpecVectors.t.sol`) and skips `id` (it hashes a struct) and `x402-exact` (no on-chain counterpart), with the departures the spec permits handled in the runner and stated in its header: windows are checked against the §6.2 bounds rather than the exact figure and the `exactOnly` vectors are skipped; the three zero-amount `check` vectors are skipped because the contract refuses zero spends before the policy (§3 note); `check-030` is skipped because addresses are bytes on-chain; `policy-003` and `policy-009` (wire-form `expiry` 0 and the zero-address co-signer, the contract's own null encodings) are the decoder's rejection, not the contract's; a tree `fund` op is applied at the child's delegation, the only point the contract funds a child; and the escalation co-signer in a vector is replaced by a key the runner holds so that `escalated` is a real co-signature. An implementation that skips a vector MUST say why, as here. The requirement in 6.3 is not covered by any vector: it concerns what a client does with a transaction's resource limit, which the vectors do not model, so it is a requirement on implementations rather than a conformance test. The TypeScript client (`foliant-js`) implements §3 for its own signing decisions and does not yet run the vectors or canonicalise addresses; it is not a conforming implementation of this draft.
+An implementation conforms to this draft if it passes every vector in `vectors.json` whose `kind` it implements: `policy` (§2 validity), `id` (§2.2), `check` (§3), `within` (§4.1), `window` (§6.1, or §6.2 with the implementation's bound), `tree` (§4.2–4.4) and `x402-exact` (§7.2). The vector file format is described at its head. The Python reference runs all seven kinds (`tests/test_spec_vectors.py`). The EVM reference runs `check`, `within`, `window`, `tree` and `policy` (`contracts/test/SpecVectors.t.sol`) and skips `id` (it hashes a struct) and `x402-exact` (no on-chain counterpart), with the departures the spec permits handled in the runner and stated in its header: windows are checked against the §6.2 bounds rather than the exact figure and the `exactOnly` vectors are skipped; the three zero-amount `check` vectors are skipped because the contract refuses zero spends before the policy (§3 note); `check-030` is skipped because addresses are bytes on-chain; `policy-003` and `policy-009` (wire-form `expiry` 0 and the zero-address co-signer, the contract's own null encodings) are the decoder's rejection, not the contract's; a tree `fund` op is applied at the child's delegation, the only point the contract funds a child; and the escalation co-signer in a vector is replaced by a key the runner holds so that `escalated` is a real co-signature. An implementation that skips a vector MUST say why, as here. The requirement in 6.3 is not covered by any vector: it concerns what a client does with a transaction's resource limit, which the vectors do not model, so it is a requirement on implementations rather than a conformance test. The TypeScript client (`foliant-js`) implements §3 for its own signing decisions and does not yet run the vectors or canonicalise addresses; it is not a conforming implementation of this draft.
 
 ## 11. Relation to other work
 
