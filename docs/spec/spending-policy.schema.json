@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://foliant.dev/spec/spending-policy-0.1.schema.json",
-  "title": "Agent Spending Policy (draft 0.1)",
+  "$id": "https://foliant.dev/spec/spending-policy-0.2.schema.json",
+  "title": "Agent Spending Policy (draft 0.2)",
   "description": "A per-account spending policy as specified in spending-policy.md. Amounts are decimal strings in the smallest unit of the asset. Addresses are canonical strings (EVM: 0x + 40 lowercase hex digits).",
   "type": "object",
   "additionalProperties": false,
@@ -58,7 +58,7 @@
           "maximum": 18446744073709551615
         }
       ],
-      "description": "null = never. 0 is invalid on the wire (spec \u00a72)."
+      "description": "null = never. 0 is invalid on the wire (spec §2)."
     },
     "escalation": {
       "oneOf": [
@@ -72,13 +72,49 @@
           "$ref": "#/$defs/keyRef"
         }
       ]
+    },
+    "assets": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "description": "Per-asset caps (spec §2.3). Absent or null = the asset is not examined. {} permits no asset.",
+          "propertyNames": {
+            "$ref": "#/$defs/assetId"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "decimals",
+              "perTxMax",
+              "perWindowMax"
+            ],
+            "properties": {
+              "decimals": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              },
+              "perTxMax": {
+                "$ref": "#/$defs/uint"
+              },
+              "perWindowMax": {
+                "$ref": "#/$defs/uint"
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "$defs": {
     "uint": {
       "type": "string",
       "pattern": "^(0|[1-9][0-9]*)$",
-      "description": "Unsigned integer as a decimal string: no sign, no leading zeros, ASCII digits. Binary encodings that cannot represent the value MUST reject it (spec \u00a72)."
+      "description": "Unsigned integer as a decimal string: no sign, no leading zeros, ASCII digits. Binary encodings that cannot represent the value MUST reject it (spec §2)."
     },
     "address": {
       "type": "string",
@@ -103,6 +139,11 @@
           "description": "Lowercase hex."
         }
       }
+    },
+    "assetId": {
+      "type": "string",
+      "pattern": "^[-A-Za-z0-9]{3,8}:[-_A-Za-z0-9]{1,32}/[-A-Za-z0-9]{3,8}:[-.%A-Za-z0-9]{1,128}$",
+      "description": "CAIP-19 asset id. Canonical form is lowercase; EVM tokens are eip155:<chainId>/erc20:<0x + 40 hex>. As with addresses (spec §2.1) the schema accepts any case and implementations MUST canonicalise before comparing; the canonical encoding (§2.2) is lowercase."
     }
   }
 }

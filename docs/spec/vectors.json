@@ -1,13 +1,15 @@
 {
- "spec": "Agent Spending Policy draft 0.1 (spending-policy.md)",
+ "spec": "Agent Spending Policy draft 0.2 (spending-policy.md)",
  "format": {
-  "check": "check(policy, amount, payee, now, spentInWindow, escalated) -> expect ('ok' or a \u00a73 reason code)",
-  "within": "within(child, parent) -> expect ('ok' or a \u00a74.1 reason code)",
-  "window": "one account, windowSecs; ops in order: {t, record} adds a spend at t; {t, expect} asserts spentInWindow(t) exactly (\u00a76.1); {t, setWindow} changes windowSecs. An approximate implementation (\u00a76.2) asserts got >= expect and got <= sum of records with t' > t - windowSecs - B for its documented B; vectors marked exactOnly change windowSecs and are for exact implementations only",
-  "tree": "accounts with parent links and policies (every account funded amply); ops in order at time t: spend {from, payee, amount, escalated?} -> expect ok or the first failing reason code walking from the account to the root; fund {from, to, amount} (from MUST be to's parent) and recall {from, of, amount} are internal moves; setPolicy {by, of, policy} where by is an account name (an ancestor's signer) or \"owner\" -> ok or a \u00a74.1 code; spentInWindow {of} -> expect the exact \u00a76.1 figure",
-  "x402-exact": "check_exact(payment, requirements, chain, spentInWindow, now, escalated, expectedPayer?) -> expect ok (with the extracted spend) or a \u00a77.2 / \u00a73 reason code; chain is the paying account's policy first, then each ancestor; spentInWindow has one figure per policy",
-  "policy": "a policy document -> expect ok or policy_invalid (\u00a72); a binary encoding that cannot represent a value rejects at decode time, which counts as policy_invalid",
-  "id": "a policy document -> its \u00a72.2 id (hex SHA-256 of the canonical wire encoding); implementations that hash a binary struct instead skip this kind and say so"
+  "check": "check(policy, amount, payee, now, spentInWindow, escalated) -> expect ('ok' or a §3 reason code)",
+  "within": "within(child, parent) -> expect ('ok' or a §4.1 reason code)",
+  "window": "one account, windowSecs; ops in order: {t, record} adds a spend at t; {t, expect} asserts spentInWindow(t) exactly (§6.1); {t, setWindow} changes windowSecs. An approximate implementation (§6.2) asserts got >= expect and got <= sum of records with t' > t - windowSecs - B for its documented B; vectors marked exactOnly change windowSecs and are for exact implementations only",
+  "tree": "accounts with parent links and policies (every account funded amply); ops in order at time t: spend {from, payee, amount, escalated?} -> expect ok or the first failing reason code walking from the account to the root; fund {from, to, amount} (from MUST be to's parent) and recall {from, of, amount} are internal moves; setPolicy {by, of, policy} where by is an account name (an ancestor's signer) or \"owner\" -> ok or a §4.1 code; spentInWindow {of} -> expect the exact §6.1 figure",
+  "x402-exact": "check_exact(payment, requirements, chain, spentInWindow, now, escalated, expectedPayer?) -> expect ok (with the extracted spend) or a §7.2 / §3 reason code; chain is the paying account's policy first, then each ancestor; spentInWindow has one figure per policy",
+  "policy": "a policy document -> expect ok or policy_invalid (§2); a binary encoding that cannot represent a value rejects at decode time, which counts as policy_invalid",
+  "id": "a policy document -> its §2.2 id (hex SHA-256 of the canonical wire encoding); implementations that hash a binary struct instead skip this kind and say so",
+  "asset-check": "check(policy, amount, payee, now, spentInWindow, escalated, asset, assetSpentInWindow) -> expect ('ok' or a §3 reason code). As `check`, for policies carrying §2.3 `assets`; `assetDecimals` is what the evaluator determines the asset's decimals to be, and is absent when it cannot determine them.",
+  "asset-within": "within(child, parent) -> expect ('ok' or a §4.1 reason code), for policies carrying §2.3 `assets`."
  },
  "vectors": [
   {
@@ -1302,7 +1304,7 @@
     {
      "t": 4700,
      "expect": "100",
-     "note": "\u00a76.1: the 1000 spend aged out under the window in force before the change, so lengthening does not bring it back"
+     "note": "§6.1: the 1000 spend aged out under the window in force before the change, so lengthening does not bring it back"
     },
     {
      "t": 5700,
@@ -1910,7 +1912,7 @@
       "amount": "50"
      },
      "expect": "ok",
-     "note": "well past every window (3600 s plus any \u00a76.2 over-count bound): everything has aged out"
+     "note": "well past every window (3600 s plus any §6.2 over-count bound): everything has aged out"
     }
    ],
    "note": "three levels"
@@ -2052,7 +2054,7 @@
       }
      },
      "expect": "ok",
-     "note": "the owner tightens the root below the child's cap; the child keeps its wider policy (an account's own signer may not change its policy, \u00a74.4)"
+     "note": "the owner tightens the root below the child's cap; the child keeps its wider policy (an account's own signer may not change its policy, §4.4)"
     },
     {
      "t": 1000,
@@ -3524,7 +3526,7 @@
     "escalation": null
    },
    "expect": "policy_invalid",
-   "note": "expiry 0 is invalid on the wire: null means never (\u00a72)"
+   "note": "expiry 0 is invalid on the wire: null means never (§2)"
   },
   {
    "id": "policy-004",
@@ -3614,7 +3616,7 @@
     "escalation": "0x0000000000000000000000000000000000000000"
    },
    "expect": "policy_invalid",
-   "note": "the zero address is not a co-signer (\u00a72)"
+   "note": "the zero address is not a co-signer (§2)"
   },
   {
    "id": "id-001",
@@ -3958,7 +3960,7 @@
    "now": 1700000000,
    "escalated": false,
    "expect": "payee_mismatch",
-   "note": "two faults: payee is checked before amount (\u00a77.2 precedence)"
+   "note": "two faults: payee is checked before amount (§7.2 precedence)"
   },
   {
    "id": "x402-032",
@@ -4135,7 +4137,7 @@
    "now": 1700000000,
    "escalated": false,
    "expect": "malformed_payment",
-   "note": "only EVM payload types are bound in 0.1 (\u00a77.2); an SVM payload is out of scope"
+   "note": "only EVM payload types are bound in 0.1 (§7.2); an SVM payload is out of scope"
   },
   {
    "id": "x402-035",
@@ -4195,6 +4197,716 @@
     "payer": "0x1111111111111111111111111111111111111111"
    },
    "note": "signature, nonce and validity are not the policy's concern"
+  },
+  {
+   "id": "asset-check-001",
+   "kind": "asset-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "500",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "assetSpentInWindow": "0",
+   "assetDecimals": 6,
+   "expect": "ok",
+   "note": "at the asset's perTxMax exactly"
+  },
+  {
+   "id": "asset-check-002",
+   "kind": "asset-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "501",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "assetSpentInWindow": "0",
+   "assetDecimals": 6,
+   "expect": "asset_per_tx_exceeded",
+   "note": "over the asset cap, under the nominal one"
+  },
+  {
+   "id": "asset-check-003",
+   "kind": "asset-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "600",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "asset": "eip155:43113/erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "assetSpentInWindow": "0",
+   "assetDecimals": 6,
+   "expect": "asset_not_allowed",
+   "note": "an asset the policy does not name is denied by default"
+  },
+  {
+   "id": "asset-check-004",
+   "kind": "asset-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {}
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "assetSpentInWindow": "0",
+   "assetDecimals": 6,
+   "expect": "asset_not_allowed",
+   "note": "an empty assets object permits no asset"
+  },
+  {
+   "id": "asset-check-005",
+   "kind": "asset-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "500",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "assetSpentInWindow": "0",
+   "assetDecimals": 18,
+   "expect": "asset_decimals_mismatch",
+   "note": "pinned 6, asset reports 18"
+  },
+  {
+   "id": "asset-check-006",
+   "kind": "asset-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "500",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "assetSpentInWindow": "0",
+   "expect": "asset_decimals_mismatch",
+   "note": "decimals undeterminable: refuse, do not assume"
+  },
+  {
+   "id": "asset-check-007",
+   "kind": "asset-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "500",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "assetSpentInWindow": "1600",
+   "assetDecimals": 6,
+   "expect": "asset_per_window_exceeded",
+   "note": "asset window full"
+  },
+  {
+   "id": "asset-check-008",
+   "kind": "asset-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "1000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "500",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "600",
+   "escalated": false,
+   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "assetSpentInWindow": "0",
+   "assetDecimals": 6,
+   "expect": "per_window_exceeded",
+   "note": "asset window has room, the nominal aggregate ceiling does not"
+  },
+  {
+   "id": "asset-check-009",
+   "kind": "asset-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "2000",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "1500",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "assetSpentInWindow": "0",
+   "assetDecimals": 6,
+   "expect": "per_tx_exceeded",
+   "note": "asset cap is wider than the nominal cap; the nominal one still binds"
+  },
+  {
+   "id": "asset-check-010",
+   "kind": "asset-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "501",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": true,
+   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "assetSpentInWindow": "0",
+   "assetDecimals": 6,
+   "expect": "ok",
+   "note": "escalation lifts the asset per-tx cap"
+  },
+  {
+   "id": "asset-check-011",
+   "kind": "asset-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "500",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": true,
+   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "assetSpentInWindow": "1600",
+   "assetDecimals": 6,
+   "expect": "asset_per_window_exceeded",
+   "note": "escalation never lifts the asset window cap"
+  },
+  {
+   "id": "asset-check-012",
+   "kind": "asset-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [
+     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "assetSpentInWindow": "0",
+   "assetDecimals": 6,
+   "expect": "payee_denied",
+   "note": "payee checks precede asset checks"
+  },
+  {
+   "id": "asset-check-013",
+   "kind": "asset-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": 500,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "1",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "assetSpentInWindow": "0",
+   "assetDecimals": 6,
+   "expect": "expired",
+   "note": "expiry precedes asset checks"
+  },
+  {
+   "id": "asset-check-014",
+   "kind": "asset-check",
+   "policy": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/ERC20:0XADFAE994BF522D8AC3262AF2339568CA3A096CED": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "amount": "500",
+   "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "now": 1000,
+   "spentInWindow": "0",
+   "escalated": false,
+   "asset": "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced",
+   "assetSpentInWindow": "0",
+   "assetDecimals": 6,
+   "expect": "ok",
+   "note": "asset ids compare canonically (§2.1 applies to the address part)"
+  },
+  {
+   "id": "asset-within-001",
+   "kind": "asset-within",
+   "child": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "parent": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "expect": "ok",
+   "note": "identical"
+  },
+  {
+   "id": "asset-within-002",
+   "kind": "asset-within",
+   "child": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "600",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "parent": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "expect": "child_asset_per_tx_wider",
+   "note": "child wider in one asset"
+  },
+  {
+   "id": "asset-within-003",
+   "kind": "asset-within",
+   "child": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "3000"
+     }
+    }
+   },
+   "parent": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "expect": "child_asset_per_window_wider",
+   "note": "child window cap wider"
+  },
+  {
+   "id": "asset-within-004",
+   "kind": "asset-within",
+   "child": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     },
+     "eip155:43113/erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "parent": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "expect": "child_asset_wider",
+   "note": "child names an asset the parent does not"
+  },
+  {
+   "id": "asset-within-005",
+   "kind": "asset-within",
+   "child": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "parent": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "expect": "child_asset_wider",
+   "note": "a constrained parent requires a constrained child"
+  },
+  {
+   "id": "asset-within-006",
+   "kind": "asset-within",
+   "child": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "parent": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null
+   },
+   "expect": "ok",
+   "note": "an unconstrained parent constrains no asset; its nominal caps still bind (4.2)"
+  },
+  {
+   "id": "asset-within-007",
+   "kind": "asset-within",
+   "child": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 18,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "parent": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "expect": "child_asset_decimals_mismatch",
+   "note": "same asset, different pinned decimals"
+  },
+  {
+   "id": "asset-within-008",
+   "kind": "asset-within",
+   "child": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "400",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "parent": {
+    "perTxMax": "1000",
+    "perWindowMax": "5000",
+    "windowSecs": 3600,
+    "allowList": null,
+    "denyList": [],
+    "expiry": null,
+    "escalation": null,
+    "assets": {
+     "eip155:43113/erc20:0xadfae994bf522d8ac3262af2339568ca3a096ced": {
+      "decimals": 6,
+      "perTxMax": "500",
+      "perWindowMax": "2000"
+     }
+    }
+   },
+   "expect": "ok",
+   "note": "child narrower"
   }
  ]
 }
