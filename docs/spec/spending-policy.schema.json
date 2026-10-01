@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://foliant.dev/spec/spending-policy-0.2.schema.json",
   "title": "Agent Spending Policy (draft 0.2)",
-  "description": "A per-account spending policy as specified in spending-policy.md. Amounts are decimal strings in the smallest increment of the meter (spec §2.3). Addresses are canonical strings (EVM: 0x + 40 lowercase hex digits).",
+  "description": "A per-account spending policy as specified in spending-policy.md. Amounts are decimal strings in the smallest unit of the asset. Addresses are canonical strings (EVM: 0x + 40 lowercase hex digits).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -73,16 +73,16 @@
         }
       ]
     },
-    "meters": {
+    "assets": {
       "oneOf": [
         {
           "type": "null"
         },
         {
           "type": "object",
-          "description": "Per-meter caps (spec §2.3). Absent or null = the meter is not examined. {} permits no meter.",
+          "description": "Per-asset caps (spec §2.3). Absent or null = the asset is not examined. {} permits no asset.",
           "propertyNames": {
-            "$ref": "#/$defs/meterId"
+            "$ref": "#/$defs/assetId"
           },
           "additionalProperties": {
             "type": "object",
@@ -140,19 +140,10 @@
         }
       }
     },
-    "meterId": {
+    "assetId": {
       "type": "string",
-      "oneOf": [
-        {
-          "pattern": "^[-A-Za-z0-9]{3,8}:[-_A-Za-z0-9]{1,32}/[-A-Za-z0-9]{3,8}:[-.%A-Za-z0-9]{1,128}$",
-          "description": "CAIP-19 asset id; EVM tokens are eip155:<chainId>/erc20:<0x + 40 hex>."
-        },
-        {
-          "pattern": "^unit:[a-z][a-z0-9-]*$",
-          "description": "Unit id. Registered names in spec §2.3.1; unit:x-... is private use."
-        }
-      ],
-      "description": "A meter: a CAIP-19 asset id, or unit:<name>. Canonical form is lowercase. As with addresses (§2.1) the schema accepts any case for the asset form and implementations MUST canonicalise before comparing. A syntactically valid unit name that §2.3.1 does not register is schema-valid and MUST be refused at evaluation as a meter the policy does not permit."
+      "pattern": "^[-A-Za-z0-9]{3,8}:[-_A-Za-z0-9]{1,32}/[-A-Za-z0-9]{3,8}:[-.%A-Za-z0-9]{1,128}$",
+      "description": "CAIP-19 asset id. Canonical form is lowercase; EVM tokens are eip155:<chainId>/erc20:<0x + 40 hex>. As with addresses (spec §2.1) the schema accepts any case and implementations MUST canonicalise before comparing; the canonical encoding (§2.2) is lowercase."
     }
   }
 }
