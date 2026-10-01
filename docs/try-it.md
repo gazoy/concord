@@ -20,7 +20,8 @@ python try_fuji.py
 
 ## What it prints
 
-This is a real run, with the hashes shortened. Yours will differ only in the addresses.
+This is a real run against the server above, on 1 October 2026. Every link in it works:
+follow them and you are reading the chain, not this page.
 
 ```
 Foliant — https://fuji.foliant.network
@@ -32,26 +33,26 @@ Foliant — https://fuji.foliant.network
    price     0.10 per call
 
 2. Get a key and ask the tap to fund it
-   made a new key, saved to /home/you/.foliant-try.json (testnet, worth nothing, delete it freely)
-   address   0xB652C2917471f500B44FC9c8d7641B5c99Cc6333
-   funded: https://testnet.snowtrace.io/tx/0x0625c853…
-   funded: https://testnet.snowtrace.io/tx/0x6530bc00…
+   made a new key, saved to /Users/you/.foliant-try.json (testnet, worth nothing, delete it freely)
+   address   0xEEa9e3ce99ee0F003ecd6fC22CB4495A06336624
+   funded: https://testnet.snowtrace.io/tx/0x9ee24e43db0bdd53db287ceebc8d50bb58578b18ffbbdb52fb1fa330b9d32250
+   funded: https://testnet.snowtrace.io/tx/0x677fe8c7b3d70bb31448b55c8ed4041ee0e56459a75bdda42752c16c9f14be42
    holding   0.02 AVAX for gas, 1,000.00 tokens to spend
 
 3. Register the orchestrator's account and fund it on chain
    policy    500.00 per payment, 2,000.00 per hour
-   registered: https://testnet.snowtrace.io/tx/0x431d7597…
-   approved: https://testnet.snowtrace.io/tx/0x0e1e2ff8…
-   deposited: https://testnet.snowtrace.io/tx/0xa1302459…
-   account   0x4f09cd997dd581d8… holding 500.00 tokens
+   registered: https://testnet.snowtrace.io/tx/0xfe6d1b09c23f777f907250ff98c3fdd2b334770221283903a2f4d6f1ef3474f1
+   approved: https://testnet.snowtrace.io/tx/0xd0e3d74147b2620a922e614f68abe97c323a37d4f8eaa05499dc8800fc8f313e
+   deposited: https://testnet.snowtrace.io/tx/0x6f4a1b235f67ac73856447b0fbee95c6eea86b73e276bbb5a36e5f3aa770d83b
+   account   0x1ff1df4bee1ceb45… holding 500.00 tokens
 
 4. Give a worker its own budget inside the orchestrator's
    policy    20.00 per payment, 60.00 per hour — inside the orchestrator's, and checked against it
-   delegated: https://testnet.snowtrace.io/tx/0x005310dc…
+   delegated: https://testnet.snowtrace.io/tx/0x9487ff6f1214e1a28026b0ddb997da778fd0baf91d5d1b8086a8e1725d60a062
    worker    funded with 60.00 tokens
 
 5. Commit the worker's budget to the provider's pool — one transaction
-   joined: https://testnet.snowtrace.io/tx/0x34adafc1…
+   joined: https://testnet.snowtrace.io/tx/0x92d8c2582bf49fc55ca3de97cac412e79d68d2fe4b7058dd597264693d6b35e9
    committed 20.00 — this is the payment the policy checks
 
 6. Make 25 paid API calls — none of these touch the chain
@@ -78,6 +79,8 @@ What the chain now says
                       because every payment is recorded against every account above it
 
 25 paid calls cost 1 transaction to set up and one to settle.
+A worker cannot exceed its budget, and no crew can exceed the orchestrator's, because
+every payment is checked against every account above it before any value moves.
 ```
 
 Every hash is a link, so none of it has to be taken on trust.
