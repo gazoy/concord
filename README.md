@@ -1,38 +1,44 @@
-# Foliant — reference implementation (Python)
+# Foliant
 
-Executable specification of the Foliant protocol: budgets and settlement for
-AI agent crews. Agent accounts with spending policies the agent's code cannot
-bypass, arranged in a tree so a whole crew shares one bound, TEE-style attestation, payment channels and streams, Ark-style pooled
-channels a whole crew pays through, HTTP 402 metering in the x402 wire format,
-and the compute-and-data market objects (whitepaper §6).
+**An on-chain spending budget for AI agent crews, and one settlement per session.**
 
-Foliant is a protocol, not a chain: on-chain contracts, an x402 payment scheme
-and an SDK, deployable on chains agents already use. First targets are Base and
-Avalanche. The whitepaper also describes a sovereign chain the protocol could
-grow into if adoption warrants it; that is a direction, not the product. §11a
-of the whitepaper records the prior art (Tempo, the x402 batch-settlement
-scheme and others) and what Foliant adds.
+An orchestrator gives each worker a budget. Every payment is checked against that worker's policy
+and every account above it before any value moves, so a worker cannot exceed its budget and a crew
+cannot exceed the orchestrator's — enforced by the contract, not by the agent's own code. The calls
+themselves are paid for off chain in the x402 wire format, so a session of any length settles in one
+transaction.
 
-This is a **spec plus demo**, not a deployment. It runs in one process with an
-in-memory ledger so the state machines and their invariants can be read,
-changed and tested quickly. The Solidity port implements the same state
-machines as contracts; the tests here become its conformance suite.
+Live on Avalanche Fuji, independently audited, with a draft specification and conformance vectors.
+
+## Try it
+
+[**Ten minutes, no wallet and no faucet**](docs/try-it.md) — fund yourself from the demo server's
+tap, give a worker a budget, make twenty-five paid calls that touch no chain, and watch the contract
+refuse the one commitment the budget does not allow.
+
+```bash
+python3 -m venv venv && . venv/bin/activate          # Python 3.11 or newer
+pip install "foliant-protocol[chain]" httpx
+curl -fsSLO https://raw.githubusercontent.com/gazoy/concord/main/examples/try_fuji.py
+python try_fuji.py
+```
+
+## What this repository is
+
+The Python reference implementation: agent accounts with spending policies arranged in a tree,
+payment channels and Ark-style pooled channels, HTTP 402 metering in the x402 wire format,
+attestation, and the market objects of whitepaper §6. It runs in one process against an in-memory
+ledger so the state machines and their invariants can be read and tested quickly, and the same
+state machines run as Solidity contracts — [deployed and audited](#on-avalanche-fuji) — with these
+tests as their conformance suite.
+
+Foliant is a protocol, not a chain: contracts, an x402 payment scheme and an SDK, on chains agents
+already use. §11a of the whitepaper records the prior art (Tempo, the x402 batch-settlement scheme
+and others) and what Foliant adds.
 
 ## Name
 
 The project was called Concord until 28 September 2026; the name was changed to Foliant after a UK trade-mark search. Older links, issues and messages that say Concord refer to this project.
-
-## Try it
-
-[**Try Foliant on Avalanche Fuji**](docs/try-it.md) — ten minutes, no wallet and no faucet: give a
-worker agent an on-chain budget, watch the chain refuse a payment that breaks it, and settle a
-session of calls in one transaction.
-
-```bash
-pip install "foliant-protocol[chain]" httpx
-curl -O https://raw.githubusercontent.com/gazoy/concord/main/examples/try_fuji.py
-python try_fuji.py
-```
 
 ## Documents
 
@@ -40,7 +46,7 @@ python try_fuji.py
 - [Whitepaper v0.1](docs/whitepaper.md) — the full design (§6 is what this repo implements)
 - [Design, feasibility and cost study](docs/study.md) — chain survey, build routes, costs, risks
 - [Try it on Fuji](docs/try-it.md) — the ten-minute walkthrough above, with what each step proves
-- [Agent Spending Policy, draft 0.1](docs/spec/spending-policy.md) — the policy tree as a chain-agnostic specification: schema, 115 conformance vectors run against both references, an x402 `exact` binding, and an [independent review](docs/spec/REVIEW-1.md)
+- [Agent Spending Policy, draft 0.1](docs/spec/spending-policy.md) — the policy tree as a chain-agnostic specification: schema, 115 conformance vectors — all of which the Python reference runs, and the EVM one runs every kind that has an on-chain meaning — an x402 `exact` binding, and an [independent review](docs/spec/REVIEW-1.md)
 
 ## Demo
 
@@ -60,6 +66,8 @@ python demo/run_uses.py     # six further uses: containment, insurable agent, ab
 pytest                      # 34 tests incl. property-based invariants
 python sim/crosschain.py --quick   # cross-ledger budget-tree simulation, smoke run
 ```
+
+<a id="on-avalanche-fuji"></a>
 
 ## On Avalanche Fuji
 

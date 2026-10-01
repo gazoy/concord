@@ -261,6 +261,7 @@ class ChainAgent:
         self.key = Account.from_key(private_key)
         self.address = self.key.address
         self.account_id: Optional[bytes] = account_id
+        self.sent: list[str] = []             # every transaction this agent has broadcast, newest last
         self.latest: dict[bytes, dict] = {}   # channel/pool id -> last update the provider accepted
         self.pending: dict[bytes, dict] = {}  # channel/pool id -> last update signed but not yet confirmed
         self.discarded: dict[bytes, dict] = {}  # last update discarded per object, in case the provider did accept it
@@ -278,6 +279,7 @@ class ChainAgent:
         signed = self.key.sign_transaction(tx)
         h = w3.eth.send_raw_transaction(signed.raw_transaction)
         r = w3.eth.wait_for_transaction_receipt(h)
+        self.sent.append(_hex(r["transactionHash"]))
         if r["status"] != 1:
             raise FoliantError(f"transaction reverted: {h.hex()}")
         return r
