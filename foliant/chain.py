@@ -69,7 +69,7 @@ def _failed(what: str, receipt, gas_limit: int) -> str:
 
     The two cases need different answers, so they are told apart rather than both reported as a revert:
     a transaction that spent its whole limit cost more in its block than in the state it was estimated
-    against (see GAS_HEADROOM), while one that stopped short reverted on a condition that changed in
+    against (see GAS_LIMIT_HEADROOM), while one that stopped short reverted on a condition that changed in
     between - a policy expiry or an escalation deadline passing, say - which no gas limit can help."""
     h = _hex(receipt["transactionHash"])
     used = receipt["gasUsed"]
@@ -129,7 +129,7 @@ NETWORKS = {43113: "avalanche-fuji", 43114: "avalanche", 31337: "anvil"}
 # require `maxFeePerGas * gas` to be covered at submission, so it goes only on the sends that can hit a
 # cliff rather than on every send. Note that a policy expiry or an escalation deadline passing between the
 # estimate and the block fails the same way with gas to spare; no headroom helps there (see _failed).
-GAS_HEADROOM = 40_000  # per account recorded; over 16,630 (bucket rollover) + 17,100 (zero-balance payee)
+GAS_LIMIT_HEADROOM = 40_000  # per account recorded; over 16,630 (bucket rollover) + 17,100 (zero-balance payee)
 MAX_TREE_DEPTH = 16    # AgentAccounts.MAX_DEPTH; bounds the walk in ChainAgent._tree_levels
 
 
@@ -333,10 +333,10 @@ class ChainAgent:
 
     def _send(self, fn, value: int = 0, commits: bool = False) -> dict:
         """Send `fn`. `commits` marks the calls that reach AgentAccounts.commit, which are the ones that
-        need gas headroom (GAS_HEADROOM); it is resolved before the estimate so its `parentOf` calls do not
+        need gas headroom (GAS_LIMIT_HEADROOM); it is resolved before the estimate so its `parentOf` calls do not
         themselves widen the gap between the estimate and the block that executes the transaction."""
         w3 = self.L.w3
-        headroom = GAS_HEADROOM * self._tree_levels() if commits else 0
+        headroom = GAS_LIMIT_HEADROOM * self._tree_levels() if commits else 0
         try:
             tx = fn.build_transaction({"from": self.address, "nonce": w3.eth.get_transaction_count(self.address, "pending"),
                                        "value": value, "chainId": self.L.chain_id})
@@ -640,7 +640,7 @@ class ChainGate:
             raise _decode_revert(e) from None
         # settling pays the payee in ERC-20: a payee swept to zero between the estimate and the block makes
         # that a write from zero rather than an update. Nothing here commits, so one allowance is enough.
-        tx["gas"] = tx["gas"] + GAS_HEADROOM
+        tx["gas"] = tx["gas"] + GAS_LIMIT_HEADROOM
         h = w3.eth.send_raw_transaction(self.key.sign_transaction(tx).raw_transaction)
         r = w3.eth.wait_for_transaction_receipt(h)
         if r["status"] != 1:
