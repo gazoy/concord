@@ -1,0 +1,42 @@
+# The metered demo API (demo/serve_chain.py) on Avalanche Fuji.
+#   sudo cp deploy/foliant-demo.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now foliant-demo
+[Unit]
+Description=Foliant metered demo API (Fuji)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=foliant
+Group=foliant
+WorkingDirectory=/opt/foliant/concord
+EnvironmentFile=/etc/foliant/demo.env
+ExecStart=/opt/foliant/venv/bin/python demo/serve_chain.py 8402
+Restart=always
+RestartSec=5
+# the server settles everything outstanding on shutdown, so give it room to finish
+TimeoutStopSec=90
+KillSignal=SIGINT
+
+# the tap's and the provider's keys live in this unit's environment, so keep the rest of the
+# machine out of reach: nothing here needs privileges, a home directory or a writable root
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# the only thing it writes: the gate's and the tap's state files
+ReadWritePaths=/var/lib/foliant
+
+[Install]
+WantedBy=multi-user.target
