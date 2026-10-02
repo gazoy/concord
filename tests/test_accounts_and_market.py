@@ -36,6 +36,23 @@ def test_policy_window_never_exceeded(per_tx, per_window, window, spends):
         assert a.signer.window.spent(L.now, window) == in_window
 
 
+def test_loaders_reject_an_unknown_field():
+    """Spec §2/§2.2 and the schema's `additionalProperties: false`: a policy carrying a field this
+    loader does not know is invalid at load. Dropping it would enforce less than the owner signed
+    over, and would give two different policies one id."""
+    pol = Policy(per_tx_max=10, per_window_max=100, window_secs=60)
+    assert Policy.from_wire(pol.wire()).spec_id == pol.spec_id   # the seven fields still parse
+    assert Policy.from_dict(pol.to_dict()).id == pol.id
+    for loader, good, extra in ((Policy.from_wire, pol.wire(), "perAssetMax"),
+                                (Policy.from_dict, pol.to_dict(), "per_asset_max")):
+        with pytest.raises(PolicyViolation, match="unknown policy field") as e:
+            loader({**good, extra: {"USDC": "1"}})
+        assert e.value.code == "policy_invalid"
+        assert extra in str(e.value)                             # the message names the offender
+    with pytest.raises(PolicyViolation, match="must be an object"):
+        Policy.from_wire("abc")                                  # not a dict: still policy_invalid
+
+
 def test_escalation_lets_owner_exceed_per_tx(world):
     L, _ = world
     esc = KeyPair.from_seed(b"esc")

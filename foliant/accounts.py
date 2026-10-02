@@ -25,6 +25,25 @@ from .errors import PolicyViolation
 
 MAX_WINDOW_SECS = 30 * 86400  # this reference bounds windowSecs (spec §2); the EVM reference accepts any uint32
 UINT128_MAX = (1 << 128) - 1
+# Spec §2/§2.2: a policy has exactly these seven fields (the schema sets "additionalProperties": false).
+# A loader that dropped a field it did not understand would enforce less than the owner signed.
+WIRE_FIELDS = frozenset({
+    "perTxMax", "perWindowMax", "windowSecs", "allowList", "denyList", "expiry", "escalation",
+})
+DICT_FIELDS = frozenset({
+    "per_tx_max", "per_window_max", "window_secs", "allow_list", "deny_list", "expiry", "escalation",
+})
+
+
+def _reject_unknown(d: object, allowed: frozenset[str]) -> dict:
+    """Spec §2: a policy carrying a field outside the seven is invalid at load, not silently
+    stripped — dropping it would enforce less than the owner signed over."""
+    if not isinstance(d, dict):
+        raise PolicyViolation(f"policy must be an object, not {type(d).__name__}", "policy_invalid")
+    unknown = sorted(repr(k) for k in set(d) - allowed)
+    if unknown:
+        raise PolicyViolation(f"unknown policy field(s): {', '.join(unknown)}", "policy_invalid")
+    return d
 
 
 def canonical_address(a: str) -> str:
@@ -88,8 +107,11 @@ class Policy:
 
     @classmethod
     def from_wire(cls, d: dict) -> "Policy":
-        """Parse the specification's wire form. Amount strings must match the spec's uint grammar."""
+        """Parse the specification's wire form. Amount strings must match the spec's uint grammar,
+        and a field outside the seven makes the policy invalid (§2, schema `additionalProperties`
+        false) rather than being dropped."""
         import re
+        _reject_unknown(d, WIRE_FIELDS)
         try:
             for k in ("perTxMax", "perWindowMax"):
                 if not isinstance(d[k], str) or not re.fullmatch(r"0|[1-9][0-9]*", d[k]):
@@ -122,6 +144,9 @@ class Policy:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Policy":
+        """Parse this reference's envelope encoding. Same rule as `from_wire`: a field outside the
+        seven is invalid, so a dropped field cannot make enforcement weaker than what was signed."""
+        _reject_unknown(d, DICT_FIELDS)
         return cls(
             per_tx_max=d["per_tx_max"],
             per_window_max=d["per_window_max"],
