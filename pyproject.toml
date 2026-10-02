@@ -22,7 +22,7 @@ packages = ["foliant"]
 foliant = ["abi/*.json"]
 
 [project.optional-dependencies]
-test = ["pytest>=8", "hypothesis>=6"]
+test = ["pytest>=8", "hypothesis>=6", "jsonschema>=4"]
 # major-version ceilings: foliant/chain.py reasons about web3 7's exception types, its
 # raw_transaction attribute and its retry allowlist, so a major bump needs the suites re-run
 chain = ["web3>=7,<8", "eth-account>=0.13,<1"]
