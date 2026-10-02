@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .crypto import KeyPair, PublicKey, Signed, hash_obj, sign
-from .errors import PolicyViolation
+from .errors import InvalidKey, PolicyViolation
 
 
 MAX_WINDOW_SECS = 30 * 86400  # this reference bounds windowSecs (spec §2); the EVM reference accepts any uint32
@@ -77,7 +77,12 @@ def _escalation(esc: object) -> object:
     """Spec §2: the co-signer is a keyRef object, an address string, or null. Both loaders go
     through here so the wire and envelope forms cannot disagree about which forms exist."""
     if isinstance(esc, dict):
-        return PublicKey.from_dict(esc)
+        try:
+            return PublicKey.from_dict(esc)
+        except InvalidKey as e:
+            # §2: an invalid policy reports policy_invalid whichever part of it is invalid, so the
+            # key-level reason is carried in the message rather than leaking InvalidKey's own code
+            raise PolicyViolation(f"escalation: {e}", "policy_invalid") from e
     return esc or None
 
 

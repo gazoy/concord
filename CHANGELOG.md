@@ -5,6 +5,54 @@
 change. Where a release changes behaviour an existing caller could depend on, this file says so
 in the entry rather than only in the version number.
 
+## 0.1.5 — 2026-10-02
+
+### Fixed
+
+- **Key references from the wire are validated.** `PublicKey.from_dict` took `scheme` and `key`
+  and checked neither. Every owner, signer and escalation co-signer key in the ledger enters
+  through it, so this was the widest of the loader holes rather than a policy detail:
+
+  - bad hex raised `ValueError` and a missing `key` raised `KeyError`. Neither is a `FoliantError`,
+    so `foliant/node.py` let them out as **HTTP 500**. Four ingress paths answered 500 and now
+    answer 400.
+  - an **unimplemented scheme** reached `verify`, which raised `ValueError` — a fifth 500, on
+    `/ledger/tx`. It now raises `InvalidKey`, so the node answers 400. Signature agility is
+    unchanged: such a key still parses, because its length cannot be known, and `verify` is still
+    where it is refused.
+  - an unknown nested field was dropped although the schema's `$defs.keyRef` sets
+    `additionalProperties: false` — 0.1.3's defect, one level down.
+  - **a two-byte string was accepted as an ed25519 public key.** This is the one that mattered.
+    Registration caught it by accident, because truncating the key changes the policy id and the
+    owner's signature stops matching, but `set_policy` carries the policy inside an envelope the
+    owner has already signed, so nothing cross-checked it. An account could be left holding an
+    escalation co-signer that cannot verify anything: the owner believes a co-signer can lift
+    `perTxMax` when no signature it produces will ever be accepted. Demonstrated end to end
+    against 0.1.4 and refused now.
+
+  A key is now exactly `{"scheme", "key"}`, both present, `key` a non-empty even-length lowercase
+  hex string (§2.2 specifies lowercase), and the right length for its scheme where the scheme is
+  one this implementation knows — 32 bytes for ed25519. This is stricter than the schema in one
+  way the schema cannot express: odd-length hex matches `^[0-9a-f]+$` but is not a whole number of
+  bytes.
+
+  `foliant/crypto.py` now imports `InvalidKey` from `foliant/errors.py`, where it previously raised
+  `ValueError` and depended on nothing. That dependency is the point: these are rejections of
+  untrusted input, and the node's contract is that a `FoliantError` is a 400. The alternative — a
+  wider `except` in `node.py` — would have turned genuine bugs into 400s too. Inside a policy the
+  failure is translated to `PolicyViolation` with code `policy_invalid`, because §2 requires that
+  code whichever part of a policy is invalid.
+
+### Known issues
+
+- `foliant-client` does not mirror these key rules. It is no longer a soundness gap now that the
+  node refuses malformed keys, but the two implementations still disagree in one place: an
+  uppercase-hex key reference is refused here and silently canonicalised there, which gives the
+  same policy two ids.
+- Unchanged from 0.1.4: no conformance vector for the unknown-field rule (deferred to draft 0.2),
+  `windowSecs` bounded per-implementation rather than by the specification, and `foliant-client`
+  carrying amounts as JavaScript numbers.
+
 ## 0.1.4 — 2026-10-02
 
 ### Added

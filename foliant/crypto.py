@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,7 +19,18 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 from cryptography.exceptions import InvalidSignature
 
+from .errors import InvalidKey
+
 SCHEME = "ed25519"
+
+# Spec §2.2: a key reference is exactly {"scheme": <name>, "key": <lowercase hex>}. The schema
+# says the same (`$defs.keyRef`, additionalProperties false, pattern ^[0-9a-f]+$).
+KEYREF_FIELDS = frozenset({"scheme", "key"})
+# Public key length per scheme, for the schemes this implementation knows. A scheme absent here
+# still parses -- signature agility means an envelope can name a scheme we cannot verify, and
+# `verify` is where that is refused -- but its length cannot be checked.
+KEY_BYTES = {SCHEME: 32}
+_HEX = re.compile(r"(?:[0-9a-f]{2})+")
 
 
 def canonical(obj: Any) -> bytes:
@@ -50,7 +62,9 @@ class PublicKey:
 
     def verify(self, message: bytes, signature: bytes) -> bool:
         if self.scheme != SCHEME:
-            raise ValueError(f"unsupported scheme {self.scheme}")
+            # a FoliantError, not a ValueError: this is reachable from the wire (an envelope
+            # naming a scheme this node does not implement) and so must answer 400, not 500
+            raise InvalidKey(f"unsupported scheme {self.scheme}")
         try:
             Ed25519PublicKey.from_public_bytes(self.raw).verify(signature, message)
             return True
@@ -62,7 +76,35 @@ class PublicKey:
 
     @classmethod
     def from_dict(cls, d: dict) -> "PublicKey":
-        return cls(d["scheme"], bytes.fromhex(d["key"]))
+        """Parse a key reference from the wire (spec §2.2).
+
+        Every owner, signer and escalation co-signer key enters here, so each of these used to be
+        a 500: `bytes.fromhex` raised ValueError on bad hex and KeyError on a missing `key`, and
+        neither is a FoliantError. A two-byte string was accepted as an ed25519 public key, and an
+        unknown nested field was dropped although the schema forbids it -- which, for a key inside
+        a signed policy, meant the id covered less than the signer wrote.
+
+        Stricter than the schema in one way it cannot express: hex of odd length matches
+        `^[0-9a-f]+$` but is not a whole number of bytes, so it is refused here.
+        """
+        if not isinstance(d, dict):
+            raise InvalidKey(f"key reference must be an object, not {type(d).__name__}")
+        unknown = sorted(repr(k) for k in set(d) - KEYREF_FIELDS)
+        if unknown:
+            raise InvalidKey(f"unknown key reference field(s): {', '.join(unknown)}")
+        missing = sorted(repr(k) for k in KEYREF_FIELDS - set(d))
+        if missing:
+            raise InvalidKey(f"missing key reference field(s): {', '.join(missing)}")
+        scheme, key = d["scheme"], d["key"]
+        if not isinstance(scheme, str) or not scheme:
+            raise InvalidKey("scheme must be a non-empty string")
+        if not isinstance(key, str) or not _HEX.fullmatch(key):
+            raise InvalidKey("key must be a non-empty even-length lowercase hex string")
+        raw = bytes.fromhex(key)
+        want = KEY_BYTES.get(scheme)
+        if want is not None and len(raw) != want:
+            raise InvalidKey(f"a {scheme} key is {want} bytes, not {len(raw)}")
+        return cls(scheme, raw)
 
 
 class KeyPair:

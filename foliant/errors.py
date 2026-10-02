@@ -11,6 +11,12 @@ class PolicyViolation(FoliantError):
         self.code = code
 
 
+class InvalidKey(FoliantError):
+    """A public key reference from the wire is not one this implementation can use: wrong shape,
+    not lowercase hex, the wrong length for its scheme, or a scheme that is not implemented.
+    Separate from InvalidSignatureError, which is a key that verified nothing."""
+
+
 class InvalidSignatureError(FoliantError):
     pass
 
