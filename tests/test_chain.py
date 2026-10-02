@@ -1,9 +1,6 @@
 """The EVM backend against a local Anvil chain: the crew scenario, the x402 flow, and settlement."""
 import os
 import shutil
-import socket
-import subprocess
-import time
 
 import httpx
 import pytest
@@ -24,32 +21,17 @@ KEYS = ["0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
         "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
         "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6"]
 
+from tests.conftest import anvil
+
 pytestmark = pytest.mark.skipif(shutil.which("anvil") is None, reason="anvil not installed")
-
-
-def _free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
 
 
 @pytest.fixture(scope="module")
 def chain():
-    port = _free_port()
-    proc = subprocess.Popen(["anvil", "--port", str(port), "--silent"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    w3 = Web3(Web3.HTTPProvider(f"http://127.0.0.1:{port}"))
-    for _ in range(100):
-        try:
-            w3.eth.chain_id
-            break
-        except Exception:
-            time.sleep(0.1)
-    addrs = deploy_local(w3, KEYS[0])
-    L = ChainLedger("", addrs["accounts"], addrs["channels"], addrs["pools"], w3=w3)
-    yield L, addrs
-    proc.kill()
+    with anvil() as (w3, port):
+        addrs = deploy_local(w3, KEYS[0])
+        L = ChainLedger("", addrs["accounts"], addrs["channels"], addrs["pools"], w3=w3)
+        yield L, addrs
 
 
 def _mint(L, token, to, amount, key=KEYS[0]):

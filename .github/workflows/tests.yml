@@ -4,7 +4,8 @@ on:
   pull_request:
 jobs:
   python:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # pinned: ubuntu-latest becomes Ubuntu 26 from 2026-10-19, and an
+    # image change is a thing to adopt deliberately, not to discover in a red run
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,7 +34,8 @@ jobs:
           exit $code
       - run: python demo/run_demo.py
   contracts:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # pinned: ubuntu-latest becomes Ubuntu 26 from 2026-10-19, and an
+    # image change is a thing to adopt deliberately, not to discover in a red run
     defaults:
       run:
         working-directory: contracts

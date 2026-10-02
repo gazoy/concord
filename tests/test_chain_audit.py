@@ -5,9 +5,6 @@ Same Anvil fixture approach as tests/test_chain.py. See contracts/audits/AUDIT-3
 """
 import json
 import shutil
-import socket
-import subprocess
-import time
 
 import pytest
 
@@ -31,32 +28,17 @@ KEYS = ["0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
         "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba"]
 SECP_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
+from tests.conftest import anvil
+
 pytestmark = pytest.mark.skipif(shutil.which("anvil") is None, reason="anvil not installed")
-
-
-def _free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
 
 
 @pytest.fixture(scope="module")
 def chain():
-    port = _free_port()
-    proc = subprocess.Popen(["anvil", "--port", str(port), "--silent"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    w3 = Web3(Web3.HTTPProvider(f"http://127.0.0.1:{port}"))
-    for _ in range(100):
-        try:
-            w3.eth.chain_id
-            break
-        except Exception:
-            time.sleep(0.1)
-    addrs = deploy_local(w3, KEYS[0])
-    L = ChainLedger("", addrs["accounts"], addrs["channels"], addrs["pools"], w3=w3)
-    yield L, addrs
-    proc.kill()
+    with anvil() as (w3, port):
+        addrs = deploy_local(w3, KEYS[0])
+        L = ChainLedger("", addrs["accounts"], addrs["channels"], addrs["pools"], w3=w3)
+        yield L, addrs
 
 
 def _mint(L, token, to, amount, key=KEYS[0]):
