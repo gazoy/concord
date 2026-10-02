@@ -53,6 +53,67 @@ def test_loaders_reject_an_unknown_field():
         Policy.from_wire("abc")                                  # not a dict: still policy_invalid
 
 
+def test_loaders_reject_a_missing_field():
+    """The other half of the unknown-field rule, and the more dangerous half: this reference's
+    defaults are the permissive readings, so a field left out widens authority. `from_dict` is
+    reached from inside a signed envelope, which means the signature covers the omission."""
+    pol = Policy(per_tx_max=10, per_window_max=100, window_secs=60)
+    for loader, good in ((Policy.from_wire, pol.wire()), (Policy.from_dict, pol.to_dict())):
+        for dropped in list(good):
+            short = {k: v for k, v in good.items() if k != dropped}
+            with pytest.raises(PolicyViolation, match="missing policy field") as e:
+                loader(short)
+            assert e.value.code == "policy_invalid"
+            assert dropped in str(e.value)
+
+
+def test_expiry_is_bounded_above():
+    """The schema has said `maximum: 18446744073709551615` all along; the code checked only >= 1."""
+    with pytest.raises(PolicyViolation, match=r"expiry must be null or an integer in \[1, 2\^64\)"):
+        Policy(per_tx_max=1, per_window_max=1, window_secs=60, expiry=1 << 64)
+    assert Policy(per_tx_max=1, per_window_max=1, window_secs=60, expiry=(1 << 64) - 1).expiry
+
+
+def test_an_address_form_co_signer_survives_both_encodings():
+    """Spec §2 allows the co-signer as a keyRef object, an address string or null. `wire()` handled
+    all three; `to_dict` assumed a keyRef, so an address form raised TypeError on load and
+    AttributeError from `Policy.id` -- a 500 at ingress for a policy the spec permits."""
+    addr = "0xAB" + "cd" * 19
+    pol = Policy(per_tx_max=1, per_window_max=1, window_secs=60, escalation=addr)
+    assert pol.escalation == addr.lower()                 # §2.1 canonicalised, not wrapped
+    assert pol.to_dict()["escalation"] == addr.lower()
+    assert pol.wire()["escalation"] == addr.lower()
+    assert pol.id and pol.spec_id                         # neither property raises any more
+    assert Policy.from_dict(pol.to_dict()).id == pol.id
+    assert Policy.from_wire(pol.wire()).spec_id == pol.spec_id
+    key = KeyPair.from_seed(b"co-signer").public          # the keyRef form still round-trips
+    keyed = Policy(per_tx_max=1, per_window_max=1, window_secs=60, escalation=key)
+    assert Policy.from_dict(keyed.to_dict()).id == keyed.id
+
+
+@pytest.mark.parametrize("bad,match", [
+    ("0x" + "ab" * 20, "must be a list"),                 # a bare string became a set of characters
+    ([1], "entries must be strings"),                     # raised AttributeError -> 500
+    (["0x" + "ab" * 20, "0x" + "ab" * 20], "duplicate"),  # schema sets uniqueItems: true
+])
+def test_address_lists_are_lists_of_distinct_strings(bad, match):
+    good = Policy(per_tx_max=1, per_window_max=1, window_secs=60).to_dict()
+    for field in ("allow_list", "deny_list"):
+        with pytest.raises(PolicyViolation, match=match) as e:
+            Policy.from_dict({**good, field: bad})
+        assert e.value.code == "policy_invalid"
+
+
+def test_two_spellings_of_one_address_still_collapse():
+    """Deliberate, and the reason duplicates are checked before canonicalisation: the schema's
+    `uniqueItems` compares the strings as given, so it permits this, and §2.1 defines addresses to
+    compare in lowercase. Rejecting it would refuse a policy the schema calls valid."""
+    a = "0x" + "ab" * 20
+    pol = Policy.from_dict({**Policy(per_tx_max=1, per_window_max=1, window_secs=60).to_dict(),
+                            "deny_list": [a, a.upper()]})
+    assert pol.deny_list == frozenset({a})
+
+
 def test_escalation_lets_owner_exceed_per_tx(world):
     L, _ = world
     esc = KeyPair.from_seed(b"esc")

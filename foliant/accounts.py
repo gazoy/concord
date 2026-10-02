@@ -25,8 +25,13 @@ from .errors import PolicyViolation
 
 MAX_WINDOW_SECS = 30 * 86400  # this reference bounds windowSecs (spec §2); the EVM reference accepts any uint32
 UINT128_MAX = (1 << 128) - 1
-# Spec §2/§2.2: a policy has exactly these seven fields (the schema sets "additionalProperties": false).
-# A loader that dropped a field it did not understand would enforce less than the owner signed.
+UINT64_MAX = (1 << 64) - 1
+# Spec §2/§2.2: a policy has exactly these seven fields -- the schema's `required` lists all seven
+# and `additionalProperties` is false. Both halves matter, and absence is the more dangerous one: a
+# dropped unknown field enforces less than the owner signed, while a *missing* field takes this
+# reference's default, and the defaults are the permissive readings (no expiry, no allow list). A
+# policy reaches `from_dict` out of a signed envelope (ledger._op_set_policy, _op_delegate), so an
+# omitted field is an omission the signature covers.
 WIRE_FIELDS = frozenset({
     "perTxMax", "perWindowMax", "windowSecs", "allowList", "denyList", "expiry", "escalation",
 })
@@ -35,19 +40,51 @@ DICT_FIELDS = frozenset({
 })
 
 
-def _reject_unknown(d: object, allowed: frozenset[str]) -> dict:
-    """Spec §2: a policy carrying a field outside the seven is invalid at load, not silently
-    stripped — dropping it would enforce less than the owner signed over."""
+def _check_fields(d: object, allowed: frozenset[str]) -> dict:
+    """Spec §2: a policy's keys are exactly the seven, so an extra one and a missing one are both
+    invalid at load rather than silently dropped or defaulted."""
     if not isinstance(d, dict):
         raise PolicyViolation(f"policy must be an object, not {type(d).__name__}", "policy_invalid")
     unknown = sorted(repr(k) for k in set(d) - allowed)
     if unknown:
         raise PolicyViolation(f"unknown policy field(s): {', '.join(unknown)}", "policy_invalid")
+    missing = sorted(repr(k) for k in allowed - set(d))
+    if missing:
+        raise PolicyViolation(f"missing policy field(s): {', '.join(missing)}", "policy_invalid")
     return d
+
+
+def _addr_list(v: object, name: str) -> frozenset[str]:
+    """Spec §2.1 and the schema's `uniqueItems`: an address list is a list of distinct strings.
+
+    Each guard is here because the bare `frozenset(...)` it replaces failed quietly or badly. A
+    bare string became a set of single characters; a non-string entry raised AttributeError out of
+    `canonical_address`, which the node returned as a 500; and duplicates were deduplicated rather
+    than refused, though the schema forbids them. Two spellings of one EVM address are a different
+    matter and still collapse: the schema permits them, because `uniqueItems` compares the strings
+    as given, and §2.1 defines addresses to compare in lowercase."""
+    if not isinstance(v, list):
+        raise PolicyViolation(f"{name} must be a list, not {type(v).__name__}", "policy_invalid")
+    for a in v:
+        if not isinstance(a, str):
+            raise PolicyViolation(f"{name} entries must be strings, not {type(a).__name__}", "policy_invalid")
+    if len(set(v)) != len(v):
+        raise PolicyViolation(f"{name} has duplicate entries", "policy_invalid")
+    return frozenset(v)
+
+
+def _escalation(esc: object) -> object:
+    """Spec §2: the co-signer is a keyRef object, an address string, or null. Both loaders go
+    through here so the wire and envelope forms cannot disagree about which forms exist."""
+    if isinstance(esc, dict):
+        return PublicKey.from_dict(esc)
+    return esc or None
 
 
 def canonical_address(a: str) -> str:
     """Spec §2.1: EVM addresses compare in lowercase hex; other address forms as given."""
+    if not isinstance(a, str):
+        raise PolicyViolation(f"address must be a string, not {type(a).__name__}", "policy_invalid")
     return a.lower() if a.startswith("0x") or a.startswith("0X") else a
 
 
@@ -70,8 +107,9 @@ class Policy:
         if not isinstance(self.window_secs, int) or isinstance(self.window_secs, bool) \
                 or self.window_secs < 1 or self.window_secs > MAX_WINDOW_SECS:
             raise PolicyViolation(f"window_secs must be in [1, {MAX_WINDOW_SECS}]", "policy_invalid")
-        if self.expiry is not None and (not isinstance(self.expiry, int) or isinstance(self.expiry, bool) or self.expiry < 1):
-            raise PolicyViolation("expiry must be null or an integer >= 1", "policy_invalid")
+        if self.expiry is not None and (not isinstance(self.expiry, int) or isinstance(self.expiry, bool)
+                                        or self.expiry < 1 or self.expiry > UINT64_MAX):
+            raise PolicyViolation("expiry must be null or an integer in [1, 2^64)", "policy_invalid")
         if self.allow_list is not None:
             self.allow_list = frozenset(canonical_address(a) for a in self.allow_list)
         self.deny_list = frozenset(canonical_address(a) for a in self.deny_list)
@@ -111,20 +149,18 @@ class Policy:
         and a field outside the seven makes the policy invalid (§2, schema `additionalProperties`
         false) rather than being dropped."""
         import re
-        _reject_unknown(d, WIRE_FIELDS)
+        _check_fields(d, WIRE_FIELDS)
         try:
             for k in ("perTxMax", "perWindowMax"):
                 if not isinstance(d[k], str) or not re.fullmatch(r"0|[1-9][0-9]*", d[k]):
                     raise PolicyViolation(f"{k} must be a decimal string", "policy_invalid")
-            esc = d["escalation"]
-            if isinstance(esc, dict):
-                esc = PublicKey.from_dict(esc)
+            esc = _escalation(d["escalation"])
             return cls(
                 per_tx_max=int(d["perTxMax"]),
                 per_window_max=int(d["perWindowMax"]),
                 window_secs=d["windowSecs"],
-                allow_list=frozenset(d["allowList"]) if d["allowList"] is not None else None,
-                deny_list=frozenset(d["denyList"]),
+                allow_list=_addr_list(d["allowList"], "allowList") if d["allowList"] is not None else None,
+                deny_list=_addr_list(d["denyList"], "denyList"),
                 expiry=d["expiry"],
                 escalation=esc,
             )
@@ -132,6 +168,7 @@ class Policy:
             raise PolicyViolation(f"malformed policy: {e}", "policy_invalid")
 
     def to_dict(self) -> dict:
+        esc = self.escalation
         return {
             "per_tx_max": self.per_tx_max,
             "per_window_max": self.per_window_max,
@@ -139,22 +176,24 @@ class Policy:
             "allow_list": sorted(self.allow_list) if self.allow_list is not None else None,
             "deny_list": sorted(self.deny_list),
             "expiry": self.expiry,
-            "escalation": self.escalation.to_dict() if self.escalation else None,
+            # an address-form co-signer (spec §2) stays a string here, as it does in `wire()`;
+            # assuming a PublicKey made `id` and this method raise AttributeError on one
+            "escalation": esc.to_dict() if isinstance(esc, PublicKey) else esc,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "Policy":
         """Parse this reference's envelope encoding. Same rule as `from_wire`: a field outside the
         seven is invalid, so a dropped field cannot make enforcement weaker than what was signed."""
-        _reject_unknown(d, DICT_FIELDS)
+        _check_fields(d, DICT_FIELDS)
         return cls(
             per_tx_max=d["per_tx_max"],
             per_window_max=d["per_window_max"],
             window_secs=d["window_secs"],
-            allow_list=frozenset(d["allow_list"]) if d.get("allow_list") is not None else None,
-            deny_list=frozenset(d.get("deny_list", [])),
-            expiry=d.get("expiry"),
-            escalation=PublicKey.from_dict(d["escalation"]) if d.get("escalation") else None,
+            allow_list=_addr_list(d["allow_list"], "allow_list") if d["allow_list"] is not None else None,
+            deny_list=_addr_list(d["deny_list"], "deny_list"),
+            expiry=d["expiry"],
+            escalation=_escalation(d["escalation"]),
         )
 
     def check(

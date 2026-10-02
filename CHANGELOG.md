@@ -5,6 +5,79 @@
 change. Where a release changes behaviour an existing caller could depend on, this file says so
 in the entry rather than only in the version number.
 
+## 0.1.4 — 2026-10-02
+
+### Added
+
+- **The specification's JSON Schema is now checked by the test suite**, in both directions
+  (`tests/test_schema.py`). Every `policy`-kind conformance vector the spec calls valid must
+  validate against `docs/spec/spending-policy.schema.json`, and every vector it calls invalid must
+  fail to validate. Nothing in the repository had ever validated anything against the schema,
+  which is how 0.1.3's bug survived: the schema said `additionalProperties: false` and the loaders
+  disagreed, indefinitely and silently.
+
+  Two of the five invalid vectors turn on rules JSON Schema cannot carry, and both are already
+  written in the schema's own `description` fields as requirements on decoders: `policy-006`,
+  because "2^128 is too large" is a numeric bound on a decimal string that `$defs.uint`'s pattern
+  cannot express, and `policy-009`, because `$defs.address` is any non-empty string so that
+  non-EVM chains can define their own canonical form, leaving "never the zero address as an
+  escalation co-signer" to prose. They are named in `SCHEMA_CANNOT_EXPRESS` with those reasons,
+  and a separate test proves `from_wire` rejects both — so nothing falls through the gap between
+  the schema and the code. Tightening the schema fails the test with a message saying to shorten
+  that list.
+
+  `jsonschema` is added to `requirements.txt` and the `test` extra. It is test-only; nothing in
+  the published package imports it.
+
+### Fixed
+
+- **A policy missing one of the seven fields is now invalid** rather than taking this reference's
+  default. This is the other half of 0.1.3's fix and the more dangerous half: the defaults are the
+  permissive readings — no expiry, no allow list — so a field left out widened authority, and
+  `from_dict` is reached from inside a *signed* envelope (`_op_set_policy`, `_op_delegate`), which
+  means the signature covered the omission. `_reject_unknown` becomes `_check_fields` and now
+  rejects both extra and missing keys.
+- **`expiry` is bounded above by 2^64 - 1**, which the schema already stated and the code did not.
+- **An address-form escalation co-signer works in the envelope encoding.** `wire()` and
+  `from_wire` handled all three forms the spec allows (keyRef object, address string, null);
+  `to_dict` and `from_dict` assumed a keyRef, so an address-form co-signer raised `TypeError` on
+  load and `AttributeError` from `Policy.id` and `to_dict`. Both loaders now share one
+  `_escalation` helper so the two encodings cannot disagree about which forms exist.
+- **An address list that is not a list, or holds a non-string, or holds duplicates, is now
+  invalid.** A bare string where a list belonged was silently accepted and became a set of single
+  characters; a non-string entry raised `AttributeError` out of `canonical_address`; duplicates
+  were deduplicated although the schema sets `uniqueItems: true`. Two spellings of one EVM address
+  still collapse, deliberately: the schema permits them, since `uniqueItems` compares the strings
+  as given, and §2.1 defines addresses to compare in lowercase.
+- **All three of 0.1.3's ingress 500s are now 400s.** `POST /ledger/accounts` answers
+  `policy_invalid` for a missing field, an address-form co-signer and a non-string list entry,
+  rather than `Internal Server Error`. This came out of the loaders rather than a wider `except`
+  in `foliant/node.py`, which would have turned genuine bugs into 400s too.
+- **`demo/run_uses.py` runs again.** Scenario 5 built its tree with `window_secs` of 365 and 90
+  days against a `MAX_WINDOW_SECS` of 30, so it had been failing before it reached its first
+  assertion. The scenario had conflated how long a delegation's authority lasts (`expiry`) with
+  the period its rate limit covers (`window_secs`); the expiries are unchanged and the windows are
+  now 30, 14 and 7 days, still nested.
+
+### Known issues
+
+- **The escalation `keyRef` object is unvalidated, and it is worse than 0.1.3 recorded.**
+  `PublicKey.from_dict` takes `scheme` and `key` and checks neither: a malformed hex key raises
+  `ValueError` and a missing `key` raises `KeyError` — both 500s at ingress — an unknown nested
+  field is dropped although the schema forbids it, and a two-byte string is accepted as an ed25519
+  public key. It is deferred rather than bundled here because `PublicKey.from_dict` parses every
+  owner and signer key in the ledger, not only co-signers, so a wrong-length *signer* key sails
+  through the same gap. That blast radius deserves its own pass.
+- `windowSecs` is bounded at 30 days by this reference and by nothing in the EVM reference, which
+  accepts any uint32. §2 and §6.2 permit an implementation to set its own bound and declare it, so
+  this conforms — but it means a policy that is legal on-chain is refused by this node, which is
+  the same disease as a dropped field one level up: a policy's validity depends on who parses it.
+  Whether `windowSecs` should have one bound in the specification is a question for draft 0.2.
+- There is still no conformance vector for the unknown-field rule. Adding one needs a §10 edit, so
+  it is deferred to the draft 0.2 work rather than opening the specification twice.
+- `foliant-client` carries amounts as JavaScript numbers and is correct only for assets with up to
+  6 decimals; see that package's README. A `bigint` migration is tracked for its 0.2.0.
+
 ## 0.1.3 — 2026-10-02
 
 ### Fixed
