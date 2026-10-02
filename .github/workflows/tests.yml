@@ -12,7 +12,25 @@ jobs:
           python-version: "3.11"
       - uses: foundry-rs/foundry-toolchain@v1   # anvil, for the EVM backend tests
       - run: pip install -r requirements.txt
-      - run: pytest -q
+      - name: pytest
+        # A failing step's own annotation carries only "Process completed with exit code 1", and
+        # the Actions log blob store is not reachable from every environment this project is worked
+        # on from, so a red run can be undiagnosable without someone opening the web UI. On failure
+        # this re-emits pytest's own summary as a workflow annotation, which the check-runs API does
+        # return. Output on success is unchanged.
+        run: |
+          set +e
+          LOG="${RUNNER_TEMP:-/tmp}/pytest.log"
+          pytest -q --tb=short > "$LOG" 2>&1
+          code=$?
+          cat "$LOG"
+          if [ "$code" -ne 0 ]; then
+            summary=$(grep -E '^(FAILED|ERROR|E |Interrupted)|[0-9]+ (failed|error)|ImportError|ModuleNotFoundError' "$LOG" \
+                      | head -40 | sed 's/%/%25/g' | tr -d '\r' | awk '{printf "%s%%0A", $0}')
+            [ -n "$summary" ] || summary="pytest exited ${code}; no FAILED, ERROR or summary line matched. See this step's log.%0A"
+            echo "::error title=pytest::${summary}"
+          fi
+          exit $code
       - run: python demo/run_demo.py
   contracts:
     runs-on: ubuntu-latest
