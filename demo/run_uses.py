@@ -176,24 +176,27 @@ def scenario_5_delegated_money(L: Ledger) -> None:
     print("\n5. delegated money: funder -> department -> project, one policy tree")
     vendors = {KeyPair.from_seed(b"approved-cloud").address, KeyPair.from_seed(b"approved-data").address}
     day = 24 * HOUR
-    funder = agent(L, "funder", Policy(per_tx_max=2_000, per_window_max=5_000, window_secs=365 * day,
+    # expiry is how long the authority lasts; window_secs is the period the rate limit covers.
+    # They are not the same, and only the window is bounded: MAX_WINDOW_SECS caps it at 30 days,
+    # so a year-long authority carries a monthly spending window, not a yearly one.
+    funder = agent(L, "funder", Policy(per_tx_max=2_000, per_window_max=5_000, window_secs=30 * day,
                                        allow_list=frozenset(vendors), expiry=L.now + 365 * day), funds=20_000)
     dept = funder.delegate(KeyPair.from_seed(b"dept-signer"),
-                           Policy(per_tx_max=2_000, per_window_max=2_000, window_secs=90 * day,
+                           Policy(per_tx_max=2_000, per_window_max=2_000, window_secs=14 * day,
                                   allow_list=frozenset(vendors), expiry=L.now + 90 * day), fund=2_000, asset=ASSET)
     project = dept.delegate(KeyPair.from_seed(b"project-signer"),
-                            Policy(per_tx_max=200, per_window_max=500, window_secs=30 * day,
+                            Policy(per_tx_max=200, per_window_max=500, window_secs=7 * day,
                                    allow_list=frozenset(vendors), expiry=L.now + 30 * day), fund=500, asset=ASSET)
     line("funder delegates 2,000 to a department, which delegates 500 to a project; funding is not a spend")
-    line(f"windows after delegation: funder {funder.account.window.spent(L.now, 365 * day)}, dept {dept.account.window.spent(L.now, 90 * day)}")
+    line(f"windows after delegation: funder {funder.account.window.spent(L.now, 30 * day)}, dept {dept.account.window.spent(L.now, 14 * day)}")
     try:
         dept.delegate(KeyPair.from_seed(b"rogue"), Policy(per_tx_max=5_000, per_window_max=5_000, window_secs=day), fund=1, asset=ASSET, salt=9)
     except PolicyViolation as e:
         line(f"a department cannot create a child wider than itself: {e}")
     cloud = next(iter(vendors))
     project.transfer(cloud, ASSET, 150)
-    line(f"project pays an approved vendor 150: applied; counted at project {project.account.window.spent(L.now, 30 * day)}, "
-         f"dept {dept.account.window.spent(L.now, 90 * day)}, funder {funder.account.window.spent(L.now, 365 * day)}")
+    line(f"project pays an approved vendor 150: applied; counted at project {project.account.window.spent(L.now, 7 * day)}, "
+         f"dept {dept.account.window.spent(L.now, 14 * day)}, funder {funder.account.window.spent(L.now, 30 * day)}")
     for label, fn in (("an unapproved vendor", lambda: project.transfer(KeyPair.from_seed(b"conference-hotel").address, ASSET, 100)),
                       ("its own cap", lambda: project.transfer(cloud, ASSET, 400))):
         try:
@@ -201,7 +204,7 @@ def scenario_5_delegated_money(L: Ledger) -> None:
         except PolicyViolation as e:
             line(f"project against {label}: {e}")
     # the department is tightened from above, mid-project: the project is bound at once
-    funder.set_child_policy(dept, Policy(per_tx_max=2_000, per_window_max=160, window_secs=90 * day,
+    funder.set_child_policy(dept, Policy(per_tx_max=2_000, per_window_max=160, window_secs=14 * day,
                                          allow_list=frozenset(vendors), expiry=L.now + 90 * day))
     try:
         project.transfer(cloud, ASSET, 20)
