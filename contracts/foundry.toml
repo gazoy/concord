@@ -6,9 +6,12 @@ solc_version = "0.8.30"
 optimizer = true
 optimizer_runs = 200
 evm_version = "cancun"
-# SpecVectors.t.sol parses the whole of docs/spec/vectors.json in every test, so each added
-# vector costs gas in all of them. At 115 vectors that test already uses ~80% of forge's
-# 2**30 default, and 157 vectors took it over (CI run 36886033594). 2**35 is ~32x headroom.
+# SpecVectors.t.sol's _run loop walks every vector in docs/spec/vectors.json and parses its
+# kind, in all five tests, so each vector added anywhere costs gas in every one of them. The
+# 2**30 default was already about 80% consumed at 115 vectors and 157 took test_tree_vectors
+# over it (CI run 36886033594). 2**35 is ~32x headroom. Both limits are raised because the
+# experiment that confirmed the fix (CI on branch ci/prove-gas-limit at 157 vectors) set both;
+# which one alone would have sufficed was not established.
 gas_limit = 34359738368
 block_gas_limit = 34359738368
 fuzz = { runs = 512 }
