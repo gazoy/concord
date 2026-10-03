@@ -157,25 +157,25 @@
     </div>
   </section>
 
-  <section id="spec">
+  <section class="light" id="spec">
     <div class="wrap">
       <p class="eyebrow mono">THE SPECIFICATION</p>
       <h2>The policy is written down, and the vectors tell you whether you have implemented it.</h2>
-      <p style="max-width:820px;margin:-12px 0 28px;color:var(--muted)">Every provider that caps what an agent may spend has invented its own field names and its own semantics, so two of them cannot read each other’s budgets. Foliant’s spending policy is specified separately from Foliant: a chain-agnostic document anyone can implement, whether or not they use these contracts.</p>
+      <p class="muted" style="max-width:820px;margin:-12px 0 28px">Every provider that caps what an agent may spend has invented its own field names and its own semantics, so two of them cannot read each other’s budgets. Foliant’s spending policy is specified separately from Foliant: a chain-agnostic document anyone can implement, whether or not they use these contracts.</p>
       <div class="grid">
         <div class="card"><h3>A document, not an API page</h3><p>Validity, the canonical encoding and policy id, the order checks run in and the reason code each one reports, the window bound, the delegation rules, and a binding to the x402 <code>exact</code> scheme. Independently reviewed, with the review rounds recorded.</p></div>
         <div class="card"><h3>Conformance vectors</h3><p>Machine-readable vectors for policy validity, ids, checks, windows and trees, plus a JSON Schema for the wire form. An implementation that skips a vector must say why.</p></div>
         <div class="card"><h3>Two implementations that pass them</h3><p>The Python reference and the Solidity contracts both run the vectors, from one file, with every departure stated. Agreement between an off-chain signer and an on-chain check is the property worth having, and it is tested rather than asserted.</p></div>
       </div>
-      <p style="margin-top:26px;color:var(--muted)">Read the <a href="https://github.com/gazoy/concord/blob/main/docs/spec/spending-policy.md">specification</a>, the <a href="https://github.com/gazoy/concord/blob/main/docs/spec/vectors.json">vectors</a> and the <a href="https://github.com/gazoy/concord/blob/main/docs/spec/spending-policy.schema.json">schema</a>. Draft 0.1 is open for comment; §8 records what is deliberately unfinished, including per-asset amounts.</p>
+      <p class="muted" style="margin-top:26px">Read the <a href="https://github.com/gazoy/concord/blob/main/docs/spec/spending-policy.md">specification</a>, the <a href="https://github.com/gazoy/concord/blob/main/docs/spec/vectors.json">vectors</a> and the <a href="https://github.com/gazoy/concord/blob/main/docs/spec/spending-policy.schema.json">schema</a>. Draft 0.1 is open for comment; §8 records what is deliberately unfinished, including per-asset amounts.</p>
     </div>
   </section>
 
-  <section class="light" id="partners">
+  <section id="partners">
     <div class="wrap">
       <p class="eyebrow mono">DESIGN PARTNERS</p>
       <h2>We're looking for one agent framework or API to pilot the contracts on a testnet you already use.</h2>
-      <p class="muted" style="max-width:820px">No cost, no exclusivity, fees waived for the first year of mainnet, and a joint announcement when the integration is live. If you run an x402 endpoint or build agents that pay for tools, <a href="mailto:gaz@garethoyston.com?subject=Foliant%20design%20partnership">get in touch</a>.</p>
+      <p class="muted" style="max-width:820px;color:var(--muted)">No cost, no exclusivity, fees waived for the first year of mainnet, and a joint announcement when the integration is live. If you run an x402 endpoint or build agents that pay for tools, <a href="mailto:gaz@garethoyston.com?subject=Foliant%20design%20partnership">get in touch</a>.</p>
     </div>
   </section>
 </main>
