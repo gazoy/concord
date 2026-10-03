@@ -8,7 +8,8 @@ cannot exceed the orchestrator's — enforced by the contract, not by the agent'
 themselves are paid for off chain in the x402 wire format, so a session settles in one transaction
 however many calls it took — as many as the committed deposit covers.
 
-Live on Avalanche Fuji, independently audited, with a draft specification and conformance vectors.
+Live on Avalanche Fuji, reviewed independently as it was built, with a draft specification and
+conformance vectors.
 
 ## Try it
 
@@ -29,12 +30,13 @@ The Python reference implementation: agent accounts with spending policies arran
 payment channels and Ark-style pooled channels, HTTP 402 metering in the x402 wire format,
 attestation, and the market objects of whitepaper §6. It runs in one process against an in-memory
 ledger so the state machines and their invariants can be read and tested quickly, and the same
-state machines run as Solidity contracts — [deployed and audited](#on-avalanche-fuji) — with these
+state machines run as Solidity contracts — [deployed and reviewed](#on-avalanche-fuji) — with these
 tests as their conformance suite.
 
 Foliant is a protocol, not a chain: contracts, an x402 payment scheme and an SDK, on chains agents
-already use. §11a of the whitepaper records the prior art (Tempo, the x402 batch-settlement scheme
-and others) and what Foliant adds.
+already use. §11a of the whitepaper records the prior art (Tempo, the x402 batch-settlement scheme,
+ERC-8427 Portable Spend Grants, Pactra and others), what Foliant adds, and the claims that earlier
+versions of it got wrong.
 
 ## Name
 
@@ -77,7 +79,9 @@ python sim/crosschain.py --quick   # cross-ledger budget-tree simulation, smoke 
 
 ## On Avalanche Fuji
 
-The contracts are deployed on Avalanche Fuji (chain 43113): AgentAccounts [`0xDB6940FBD9Dcf8AAD1aBB521B4b6790D0b579c92`](https://testnet.snowtrace.io/address/0xDB6940FBD9Dcf8AAD1aBB521B4b6790D0b579c92), PaymentChannels [`0xa857d5EF74F63fd10BD786bf2d66EaA53736c976`](https://testnet.snowtrace.io/address/0xa857d5EF74F63fd10BD786bf2d66EaA53736c976), Pools [`0x26665c7Ad0a4272F87D1949745dD4B4743F53662`](https://testnet.snowtrace.io/address/0x26665c7Ad0a4272F87D1949745dD4B4743F53662). `ChainLedger.for_network("avalanche-fuji")` in `foliant.chain` targets them; `demo/serve_chain.py` runs the metered API against them. Measured gas and the cost of a session: [docs/fuji-cost-report.md](docs/fuji-cost-report.md). Audits: [`contracts/audits/`](contracts/audits/).
+The contracts are deployed on Avalanche Fuji (chain 43113): AgentAccounts [`0xDB6940FBD9Dcf8AAD1aBB521B4b6790D0b579c92`](https://testnet.snowtrace.io/address/0xDB6940FBD9Dcf8AAD1aBB521B4b6790D0b579c92), PaymentChannels [`0xa857d5EF74F63fd10BD786bf2d66EaA53736c976`](https://testnet.snowtrace.io/address/0xa857d5EF74F63fd10BD786bf2d66EaA53736c976), Pools [`0x26665c7Ad0a4272F87D1949745dD4B4743F53662`](https://testnet.snowtrace.io/address/0x26665c7Ad0a4272F87D1949745dD4B4743F53662). `ChainLedger.for_network("avalanche-fuji")` in `foliant.chain` targets them; `demo/serve_chain.py` runs the metered API against them. Measured gas and the cost of a session: [docs/fuji-cost-report.md](docs/fuji-cost-report.md).
+
+Review: [`contracts/audits/`](contracts/audits/) holds three reports, 37 findings, all closed. Each round was carried out against the finished stage by a reviewer working from the specification rather than from the implementation, which is what "reviewed independently" means here and everywhere in this repository. No commissioned third-party audit has been done; one is deferred until there is money for it, and nothing here should be read as a substitute for it.
 
 ## Packages
 
@@ -102,7 +106,7 @@ The contracts are deployed on Avalanche Fuji (chain 43113): AgentAccounts [`0xDB
 | `foliant/x402.py` | §6.5, §6.9 | `PaymentGate` (provider middleware, FastAPI) and `AgentHttpClient` (pays on 402) |
 | `demo/` | | A metered API, the four-scenario demo and six further use-case scenarios |
 | `tests/` | §10 | Invariants: conservation, bounds, replay, stale/forged updates, unilateral exit, policy windows, the budget tree |
-| `sim/` | §12 open problems | Cross-ledger budget tree study: specification, simulation, results, two independent audits |
+| `sim/` | §12 open problems | Cross-ledger budget tree study: specification, simulation, results, two independent review rounds |
 
 ## The rule that matters
 
