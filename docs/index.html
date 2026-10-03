@@ -77,6 +77,7 @@
     <nav>
       <a href="#how">How it works</a>
       <a href="#proof">It runs today</a>
+      <a href="#spec">Specification</a>
       <a href="https://github.com/gazoy/concord/blob/main/docs/whitepaper.md">Whitepaper</a>
       <a href="https://github.com/gazoy/concord">GitHub</a>
     </nav>
@@ -106,7 +107,7 @@
       <h2>Agents are becoming economic actors, and every rail treats them like a human with a card.</h2>
       <div class="grid">
         <div class="card"><h3>One transaction per call</h3><p>An agent making thousands of API calls an hour signs and settles each one. Too slow, too expensive, and it fills the chain with dust.</p></div>
-        <div class="card"><h3>The budget lives in the code</h3><p>Nothing bounds what an agent can spend except the software driving it. Give an agent a wallet and you have given it a hot wallet.</p></div>
+        <div class="card"><h3>A crew is bounded nowhere</h3><p>A single agent can be bounded: wallet and card providers enforce per-agent limits, one or two levels deep, as a trusted operator. What nothing bounds is a crew — an orchestrator delegating to workers that delegate again, where the budget the owner signed has to hold across the whole tree.</p></div>
         <div class="card"><h3>Providers carry the risk</h3><p>An API serving many agents has no way to batch what they owe, verify what they are, or cap what any one of them can run up.</p></div>
       </div>
     </div>
@@ -123,6 +124,7 @@
         <div class="card"><h3>Channels and pools</h3><p>A session of thousands of calls settles in one transaction. A provider serving a whole crew settles all of it in one, with each member bounded by its own budget. Every payer can exit alone.</p></div>
         <div class="card"><h3>x402 on the wire</h3><p>Same headers, same 402 body. Any x402 client or middleware works unchanged; Foliant is a payment scheme to add, not a new stack to adopt.</p></div>
       </div>
+      <p style="max-width:820px;margin:28px 0 0;color:var(--muted)">Next to an agent wallet that enforces limits on your behalf, two things differ. The checks are in a contract rather than in an operator’s service, so the party being paid does not have to trust the party spending, which is what makes a crew that spans two organisations workable. And the tree is sixteen levels deep rather than two: tighten a parent and the children that already exist are bound at once, not at their next renewal.</p>
     </div>
   </section>
 
@@ -151,7 +153,21 @@
         <div class="stat"><div class="big">0</div><p>Over-budget payments, by any agent or any crew: the signer and the contract agree exactly</p></div>
         <div class="stat"><div class="big">339</div><p>Tests across the Python reference and the Solidity contracts, including property-based invariants over random budget trees</p></div>
       </div>
-      <p style="margin-top:26px;color:var(--muted)">Open source under Apache-2.0. The quickest way to judge it is to <a href="https://github.com/gazoy/concord/blob/main/docs/try-it.md">run it on Fuji</a>: no wallet and no faucet, ten minutes, and every transaction links to the explorer. What the gas actually costs is <a href="https://github.com/gazoy/concord/blob/main/docs/fuji-cost-report.md">measured and written up</a>. To read rather than run: the <a href="https://github.com/gazoy/concord/blob/main/docs/whitepaper.md">whitepaper</a> sets out the full network and the <a href="https://github.com/gazoy/concord/blob/main/docs/study.md">study</a> covers feasibility; <code>python demo/run_demo.py</code> runs all five scenarios against an in-memory ledger in about a second. Live on Avalanche Fuji: contracts <a href="https://testnet.snowtrace.io/address/0xDB6940FBD9Dcf8AAD1aBB521B4b6790D0b579c92">AgentAccounts</a>, <a href="https://testnet.snowtrace.io/address/0xa857d5EF74F63fd10BD786bf2d66EaA53736c976">PaymentChannels</a>, <a href="https://testnet.snowtrace.io/address/0x26665c7Ad0a4272F87D1949745dD4B4743F53662">Pools</a>, independently audited (<a href="https://github.com/gazoy/concord/tree/main/contracts/audits">three reports</a>). The spending policy is also written up as a chain-agnostic <a href="https://github.com/gazoy/concord/blob/main/docs/spec/spending-policy.md">specification</a> with conformance vectors and an x402 binding, independently reviewed. Packages: <code>foliant-protocol</code> and <code>langchain-foliant</code> on PyPI (<code>langchain-foliant</code> is a <a href="https://docs.langchain.com/oss/python/integrations/providers/all_providers">listed LangChain integration</a>), <code>foliant-client</code> and <code>elizaos-plugin-foliant</code> on npm. Section 11a of the whitepaper records the prior art, including Tempo and the x402 batch-settlement scheme, and what Foliant adds to them.</p>
+      <p style="margin-top:26px;color:var(--muted)">Open source under Apache-2.0. The quickest way to judge it is to <a href="https://github.com/gazoy/concord/blob/main/docs/try-it.md">run it on Fuji</a>: no wallet and no faucet, ten minutes, and every transaction links to the explorer. What the gas actually costs is <a href="https://github.com/gazoy/concord/blob/main/docs/fuji-cost-report.md">measured and written up</a>. To read rather than run: the <a href="https://github.com/gazoy/concord/blob/main/docs/whitepaper.md">whitepaper</a> sets out the full network and the <a href="https://github.com/gazoy/concord/blob/main/docs/study.md">study</a> covers feasibility; <code>python demo/run_demo.py</code> runs all five scenarios against an in-memory ledger in about a second. Live on Avalanche Fuji: contracts <a href="https://testnet.snowtrace.io/address/0xDB6940FBD9Dcf8AAD1aBB521B4b6790D0b579c92">AgentAccounts</a>, <a href="https://testnet.snowtrace.io/address/0xa857d5EF74F63fd10BD786bf2d66EaA53736c976">PaymentChannels</a>, <a href="https://testnet.snowtrace.io/address/0x26665c7Ad0a4272F87D1949745dD4B4743F53662">Pools</a>, independently audited (<a href="https://github.com/gazoy/concord/tree/main/contracts/audits">three reports</a>). Packages: <code>foliant-protocol</code> and <code>langchain-foliant</code> on PyPI (<code>langchain-foliant</code> is a <a href="https://docs.langchain.com/oss/python/integrations/providers/all_providers">listed LangChain integration</a>), <code>foliant-client</code> and <code>elizaos-plugin-foliant</code> on npm. Section 11a of the whitepaper records the prior art, including Tempo and the x402 batch-settlement scheme, and what Foliant adds to them.</p>
+    </div>
+  </section>
+
+  <section id="spec">
+    <div class="wrap">
+      <p class="eyebrow mono">THE SPECIFICATION</p>
+      <h2>The policy is written down, and the vectors tell you whether you have implemented it.</h2>
+      <p style="max-width:820px;margin:-12px 0 28px;color:var(--muted)">Every provider that caps what an agent may spend has invented its own field names and its own semantics, so two of them cannot read each other’s budgets. Foliant’s spending policy is specified separately from Foliant: a chain-agnostic document anyone can implement, whether or not they use these contracts.</p>
+      <div class="grid">
+        <div class="card"><h3>A document, not an API page</h3><p>Validity, the canonical encoding and policy id, the order checks run in and the reason code each one reports, the window bound, the delegation rules, and a binding to the x402 <code>exact</code> scheme. Independently reviewed, with the review rounds recorded.</p></div>
+        <div class="card"><h3>Conformance vectors</h3><p>Machine-readable vectors for policy validity, ids, checks, windows and trees, plus a JSON Schema for the wire form. An implementation that skips a vector must say why.</p></div>
+        <div class="card"><h3>Two implementations that pass them</h3><p>The Python reference and the Solidity contracts both run the vectors, from one file, with every departure stated. Agreement between an off-chain signer and an on-chain check is the property worth having, and it is tested rather than asserted.</p></div>
+      </div>
+      <p style="margin-top:26px;color:var(--muted)">Read the <a href="https://github.com/gazoy/concord/blob/main/docs/spec/spending-policy.md">specification</a>, the <a href="https://github.com/gazoy/concord/blob/main/docs/spec/vectors.json">vectors</a> and the <a href="https://github.com/gazoy/concord/blob/main/docs/spec/spending-policy.schema.json">schema</a>. Draft 0.1 is open for comment; §8 records what is deliberately unfinished, including per-asset amounts.</p>
     </div>
   </section>
 
