@@ -128,6 +128,11 @@ in the entry rather than only in the version number.
 
 ## 0.1.3 — 2026-10-02
 
+**Never released.** The fix below turned out to be incomplete, and 0.1.4 went out the same day
+instead, so there is no 0.1.3 on PyPI and no `v0.1.3` tag. The entry stays because 0.1.4's entry
+refers back to what this version changed, and because the sequence is the point: a loader hole
+closed in one place and still open one level down.
+
 ### Fixed
 
 - **`Policy.from_dict` and `Policy.from_wire` now reject a policy carrying a field the
